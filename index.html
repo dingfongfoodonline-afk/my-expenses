@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>My Expenses</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="My Expenses">
+<meta name="format-detection" content="telephone=no">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<meta name="description" content="Private expense tracker. Your data stays on this device.">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <!-- HOME -->
+  <section class="view active" id="view-home" aria-label="Expenses">
+    <header class="largetitle">
+      <div class="titlerow">
+        <h1>My Expenses</h1>
+        <button class="iconbtn" id="btn-search-toggle" aria-label="Search">
+          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        </button>
+      </div>
+    </header>
+
+<!-- Install hint (Safari, not installed) -->
+    <div class="installhint" id="installhint" hidden>
+      <div>
+        <b>Install on your iPhone</b>
+        <span>Tap <svg class="share" viewBox="0 0 24 24"><path d="M12 3v12M8 7l4-4 4 4"/><path d="M6 11v9h12v-9"/></svg> Share, then <b>Add to Home Screen</b>.</span>
+      </div>
+      <button class="iconbtn sm" id="installhint-x" aria-label="Dismiss">✕</button>
+    </div>
+    <div class="balancecard" id="balancecard">
+      <div class="bc-label">Balance</div>
+      <div class="bc-amount" id="bc-balance">฿0.00</div>
+      <div class="bc-row">
+        <div class="bc-col"><span class="dot in"></span><div><div class="bc-sub">Total added</div><div class="bc-val" id="bc-added">฿0.00</div></div></div>
+        <div class="bc-col"><span class="dot out"></span><div><div class="bc-sub">Total spent</div><div class="bc-val" id="bc-spent">฿0.00</div></div></div>
+      </div>
+      <div class="bc-start" id="bc-start"></div>
+    </div>
+
+    <div class="searchwrap" id="searchwrap" hidden>
+      <div class="searchbox">
+        <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        <input id="search" type="search" placeholder="Search notes, categories, amounts" autocomplete="off" enterkeyhint="search">
+      </div>
+    </div>
+
+    <div class="chips scroller" id="month-chips" aria-label="Filter by month"></div>
+    <div class="chips scroller" id="cat-chips" aria-label="Filter by category"></div>
+
+    <div class="filterbar" id="filterbar"></div>
+    <div id="list"></div>
+    <div class="empty" id="empty" hidden>
+      <div class="empty-art">🧾</div>
+      <h2>No entries yet</h2>
+      <p>Tap <b>+</b> to log your first expense or add money.</p>
+    </div>
+  </section>
+
+  <!-- SUMMARY -->
+  <section class="view" id="view-summary" aria-label="Summary">
+    <header class="largetitle"><div class="titlerow"><h1>Summary</h1></div></header>
+    <div class="monthnav">
+      <button class="iconbtn" id="sum-prev" aria-label="Previous month"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
+      <div class="monthnav-label" id="sum-month">—</div>
+      <button class="iconbtn" id="sum-next" aria-label="Next month"><svg viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"/></svg></button>
+    </div>
+    <div class="statgrid">
+      <div class="stat"><div class="stat-l">Spent</div><div class="stat-v out" id="sum-spent">—</div></div>
+      <div class="stat"><div class="stat-l">Added</div><div class="stat-v in" id="sum-added">—</div></div>
+      <div class="stat"><div class="stat-l">Net</div><div class="stat-v" id="sum-net">—</div></div>
+    </div>
+    <div class="card">
+      <div class="card-h">Spending by category</div>
+      <div class="donutwrap"><div id="donut"></div></div>
+      <div id="catlist"></div>
+    </div>
+    <div class="card">
+      <div class="card-h">Daily spending <span class="muted" id="sum-avg"></span></div>
+      <div id="daily"></div>
+    </div>
+  </section>
+
+  <!-- SETTINGS -->
+  <section class="view" id="view-settings" aria-label="Settings">
+    <header class="largetitle"><div class="titlerow"><h1>Settings</h1></div></header>
+
+    <div class="group-h">Money</div>
+    <div class="group">
+      <label class="row">
+        <span class="row-l">Starting balance</span>
+        <input class="row-input" id="set-start" inputmode="decimal" placeholder="0.00" autocomplete="off">
+      </label>
+      <label class="row">
+        <span class="row-l">Currency symbol</span>
+        <input class="row-input" id="set-symbol" maxlength="4" placeholder="฿" autocomplete="off">
+      </label>
+    </div>
+    <div class="group-f">Balance = starting balance + money added − money spent.</div>
+
+    <div class="group-h">Categories</div>
+    <div class="group" id="custom-cats"></div>
+    <div class="group">
+      <button class="row link" id="btn-add-cat"><span class="row-l">＋ Add custom category</span></button>
+    </div>
+
+    <div class="group-h">Backup</div>
+    <div class="group">
+      <button class="row link" id="btn-export"><span class="row-l">Export backup (.json)</span><span class="chev">›</span></button>
+      <label class="row link" for="import-file"><span class="row-l">Restore from backup…</span><span class="chev">›</span></label>
+      <input type="file" id="import-file" accept="application/json,.json" hidden>
+    </div>
+    <div class="group-f" id="backup-note">Your data lives only in this phone's browser storage. Export a backup now and then (photos are included) and save it to Files or iCloud Drive.</div>
+
+    <div class="group-h">Storage</div>
+    <div class="group">
+      <div class="row"><span class="row-l">Entries</span><span class="row-r" id="st-count">0</span></div>
+      <div class="row"><span class="row-l">Space used</span><span class="row-r" id="st-used">—</span></div>
+      <div class="row"><span class="row-l">Persistent storage</span><span class="row-r" id="st-persist">—</span></div>
+    </div>
+    <div class="group-f">No accounts, no servers, no tracking. Nothing ever leaves this device unless you export it.</div>
+
+    <div class="group">
+      <button class="row danger" id="btn-wipe"><span class="row-l">Erase all data</span></button>
+    </div>
+    <div class="ver" id="ver">My Expenses</div>
+  </section>
+</div>
+
+<!-- Tab bar -->
+<nav class="tabbar" id="tabbar">
+  <button class="tab active" data-view="home"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span>Entries</span></button>
+  <button class="tab" data-view="summary"><svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9h-9z"/><path d="M15 3.5A9 9 0 0 1 20.5 9H15z"/></svg><span>Summary</span></button>
+  <button class="tab" data-view="settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>Settings</span></button>
+</nav>
+<button class="fab" id="fab" aria-label="Add entry"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+
+<!-- Bottom sheet: add/edit -->
+<div class="scrim" id="scrim" hidden></div>
+<div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title" hidden>
+  <div class="grabber"></div>
+  <div class="sheet-head">
+    <button class="textbtn" id="sheet-cancel">Cancel</button>
+    <div class="sheet-title" id="sheet-title">New Entry</div>
+    <button class="textbtn bold" id="sheet-save">Save</button>
+  </div>
+  <form class="sheet-body" id="form" novalidate autocomplete="off">
+    <div class="segmented" id="seg-type" role="tablist">
+      <button type="button" data-type="expense" class="on">Expense</button>
+      <button type="button" data-type="income">Add money</button>
+      <span class="seg-thumb"></span>
+    </div>
+    <div class="amountwrap">
+      <span class="amount-sym" id="amount-sym">฿</span>
+      <input id="f-amount" class="amount" inputmode="decimal" placeholder="0" aria-label="Amount" enterkeyhint="done">
+    </div>
+    <div class="err" id="f-err" hidden></div>
+
+    <div class="flabel">Category</div>
+    <div class="catgrid" id="f-cats"></div>
+
+    <div class="group">
+      <label class="row"><span class="row-l">Date</span><input class="row-input" type="date" id="f-date" required></label>
+      <label class="row"><span class="row-l">Time</span><input class="row-input" type="time" id="f-time" required></label>
+      <button type="button" class="row link sm" id="f-now"><span class="row-l">Set to now</span></button>
+    </div>
+
+    <div class="group">
+      <textarea id="f-note" rows="2" placeholder="Note (e.g. lunch with team, Grab to office)" maxlength="500"></textarea>
+    </div>
+
+    <div class="flabel">Photo</div>
+    <div class="photobox" id="photobox">
+      <label class="photo-add" for="f-photo" id="photo-add">
+        <svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
+        <span>Add receipt or photo</span>
+      </label>
+      <div class="photo-prev" id="photo-prev" hidden>
+        <img id="photo-img" alt="Attached photo">
+        <div class="photo-actions">
+          <button type="button" class="pill" id="photo-view">View</button>
+          <label class="pill" for="f-photo">Replace</label>
+          <button type="button" class="pill danger" id="photo-remove">Remove</button>
+        </div>
+      </div>
+      <input type="file" id="f-photo" accept="image/*" hidden>
+    </div>
+
+    <button type="button" class="deletebtn" id="f-delete" hidden>Delete entry</button>
+    <div class="meta" id="f-meta"></div>
+  </form>
+</div>
+
+<!-- Photo viewer -->
+<div class="viewer" id="viewer" hidden>
+  <img id="viewer-img" alt="Photo">
+  <button class="viewer-x" id="viewer-x" aria-label="Close">✕</button>
+</div>
+
+<!-- Dialog -->
+<div class="dlg-scrim" id="dlg" hidden>
+  <div class="dlg" role="alertdialog" aria-modal="true">
+    <div class="dlg-body"><div class="dlg-title" id="dlg-title"></div><div class="dlg-msg" id="dlg-msg"></div><div id="dlg-extra"></div></div>
+    <div class="dlg-btns" id="dlg-btns"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="logic.js"></script>
+<script src="db.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
