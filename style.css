@@ -363,3 +363,21 @@ body.locked #app, body.locked .tabbar, body.locked .fab { visibility: hidden; }
 .lock-note { color: rgba(255,255,255,.6); font-size: 13px; }
 .dlg-err { color: var(--red); font-size: 13px; margin-top: 8px; }
 .dlg .dlg-input + .dlg-input { margin-top: 8px; }
+
+/* v1.4.0 accounts inside the balance card */
+.accts { margin-top: 10px; background: rgba(255,255,255,.14); border-radius: 14px; overflow: hidden; }
+.accts .mlitem { min-height: 0; }
+.accts .mlitem + .mlitem::before { left: 46px; background: rgba(255,255,255,.22); }
+.acct .mlslide { background: transparent; padding: 0; min-height: 54px; }
+.acct .mldel { width: var(--sw, 0px); overflow: hidden; white-space: nowrap; transition: width .25s cubic-bezier(.2,.9,.25,1); }
+.acctbody { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 8px 12px; color: #fff; text-align: left; min-height: 54px; }
+.acctbody:active { background: rgba(255,255,255,.1); }
+.acct-ic { width: 26px; text-align: center; font-size: 18px; flex: none; }
+.acctbody .it-main { flex: 1; min-width: 0; }
+.acctbody .it-title { font-size: 15px; font-weight: 600; }
+.acctbody .it-sub { font-size: 12px; color: rgba(255,255,255,.75); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.acctbody .it-amt { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; color: #fff; }
+.acct-sub { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; font-size: 13px; color: rgba(255,255,255,.85); border-top: .5px solid rgba(255,255,255,.22); }
+.acct-sub b { font-size: 16px; color: #fff; font-variant-numeric: tabular-nums; }
+.addacct { margin-top: 10px; font-size: 13px; font-weight: 600; color: #fff; background: rgba(255,255,255,.16); border-radius: 999px; padding: 6px 12px; }
+.addacct:active { background: rgba(255,255,255,.28); }

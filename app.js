@@ -4,7 +4,7 @@
   const L = window.Logic;
   const $ = (s, el) => (el || document).querySelector(s);
   const $$ = (s, el) => Array.from((el || document).querySelectorAll(s));
-  const APP_VERSION = '1.3.0';
+  const APP_VERSION = '1.4.0';
 
   const state = {
     entries: [],
@@ -13,7 +13,7 @@
     view: 'moneyleft',
     sumMonth: L.monthKey(Date.now()),
     listLimit: 200,
-    ml: { bank: 0, bankUpdated: null, groups: [], items: [], snaps: [] }
+    ml: { bank: 0, bankUpdated: null, accounts: [], groups: [], items: [], snaps: [] }
   };
   const thumbURLs = new Map(); // id -> { blob, url }
   let form = null; // add/edit form state
@@ -76,12 +76,17 @@
     ]);
     state.entries = entries || [];
     state.settings = { start: start || 0, symbol: symbol || '฿', customCats: customCats || [] };
-    const [mlBank, mlGroups, mlItems, mlSnaps] = await Promise.all([DB.getKV('mlBank', null), DB.getKV('mlGroups', []), DB.allML(), DB.allSnaps()]);
+    const [mlBank, mlAccts, mlGroups, mlItems, mlSnaps] = await Promise.all([DB.getKV('mlBank', null), DB.getKV('mlAccounts', null), DB.getKV('mlGroups', []), DB.allML(), DB.allSnaps()]);
     let items = mlItems || [];
     if ((mlGroups && mlGroups.length) || items.some(i => i.groupId)) { // v1.2.2: groups removed -> flatten into one entry list
       items = L.flattenML(mlGroups || [], items); await DB.putMLs(items); await DB.setKV('mlGroups', []);
     }
-    state.ml = { bank: mlBank ? mlBank.amount || 0 : 0, bankUpdated: mlBank ? mlBank.updated || null : null, groups: [], items, snaps: mlSnaps || [] };
+    let accounts = L.normAccounts(mlAccts);
+    if (!accounts.length) { // v1.4.0: single bank balance -> first account (keeps its timestamp); stored in kv, encrypted like other records
+      accounts = [L.legacyAccount(mlBank ? mlBank.amount || 0 : 0, mlBank ? mlBank.updated : null)];
+      await DB.setKV('mlAccounts', accounts); if (mlBank) await DB.setKV('mlBank', null);
+    }
+    state.ml = { bank: 0, bankUpdated: null, accounts, groups: [], items, snaps: mlSnaps || [] }; syncBank();
   }
 
   // ---------- render: home ----------
@@ -420,9 +425,25 @@
     const d = new Date(ts); const sameYear = d.getFullYear() === new Date().getFullYear();
     return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: sameYear ? undefined : 'numeric' }) + ', ' + d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
   }
-  async function mlSetBank(cents, ts) {
-    state.ml.bank = cents; state.ml.bankUpdated = ts || Date.now();
-    await DB.setKV('mlBank', { amount: state.ml.bank, updated: state.ml.bankUpdated });
+  function syncBank() {
+    const ac = state.ml.accounts = L.sortAccounts(state.ml.accounts);
+    state.ml.bank = L.acctTotal(ac);
+    state.ml.bankUpdated = ac.reduce((m, x) => Math.max(m, x.updated || 0), 0) || null;
+  }
+  async function saveAccounts() { syncBank(); await DB.setKV('mlAccounts', state.ml.accounts); }
+  function primaryAccount() { const ac = state.ml.accounts; return ac.find(x => x.type === 'bank') || ac[0]; }
+  // "add to bank" when an entry is received goes to the first Bank account
+  async function mlAdjustPrimary(delta, ts) {
+    const p = primaryAccount(); if (!p) return;
+    p.balance += delta; p.updated = ts || Date.now(); await saveAccounts();
+  }
+  const ACCT_ICON = { bank: '🏦', cash: '💵' };
+  function acctTypeLabel(t) { return t === 'cash' ? 'Cash' : 'Bank'; }
+  function acctRowHTML(x) {
+    return `<div class="mlitem acct" data-id="${esc(x.id)}" data-peek="">
+      <button class="mldel" data-delacct="${esc(x.id)}" aria-label="Delete ${esc(x.name)}"><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg><span>Delete · ลบ</span></button>
+      <div class="mlslide"><button class="acctbody" data-acct="${esc(x.id)}"><span class="acct-ic">${ACCT_ICON[x.type]}</span><div class="it-main"><div class="it-title"><span class="t">${esc(x.name)}</span></div>
+      <div class="it-sub">${acctTypeLabel(x.type)} · ${x.updated ? 'Updated ' + esc(fmtStamp(x.updated)) : 'Tap to set'}</div></div><div class="it-amt">${mlm(x.balance)}</div></button></div></div>`;
   }
   async function mlPutItem(it) {
     await DB.putML(it);
@@ -443,15 +464,19 @@
   }
   function renderMoneyLeft() {
     const ml = state.ml;
-    const t = L.mlTotals(ml.bank, ml.items);
+    const t = L.mlTotals(ml.accounts, ml.items);
     $('#ml-total').textContent = mlm(t.total);
+    const ac = ml.accounts, one = ac.length === 1 ? ac[0] : null;
     $('#ml-bank').textContent = mlm(t.bank);
-    $('#ml-bank-upd').textContent = ml.bankUpdated ? 'Updated ' + fmtStamp(ml.bankUpdated) : 'Tap to set · แตะเพื่อใส่ยอด';
+    $('#ml-bank-lbl').textContent = one ? `${ACCT_ICON[one.type]} ${acctTypeLabel(one.type)} · ${one.name}` : '🏦 Accounts · บัญชี';
+    $('#ml-bank-upd').textContent = one ? (one.updated ? 'Updated ' + fmtStamp(one.updated) : 'Tap to set · แตะเพื่อใส่ยอด') : `${ac.length} accounts`;
+    $('#ml-accts').hidden = !!one;
+    $('#ml-accts').innerHTML = one ? '' : ac.map(acctRowHTML).join('') + `<div class="acct-sub"><span>Accounts subtotal · รวมบัญชี</span><b id="ml-acct-sub">${mlm(t.bank)}</b></div>`;
     $('#ml-pending').textContent = mlm(t.pending);
     $('#ml-pending-n').textContent = t.pendingCount + (t.pendingCount === 1 ? ' entry' : ' entries');
     const pend = L.sortItems(ml.items.filter(i => i.status !== 'received'));
     $('#ml-groups').innerHTML = `<div class="flabel">Entries · รายการ</div><div class="items">${pend.map(it => mlItemHTML(it, false)).join('')}<button class="mladd" data-additem="1">＋ Add entry · เพิ่มรายการ</button></div>
-      <div class="mltotal"><div><div class="mlt-l">รวม · Total</div><div class="mlt-s">เงินในธนาคาร ${mlm(t.bank)} + รายการ ${mlm(t.pending)}</div></div><div class="mlt-v" id="ml-total-foot">${mlm(t.total)}</div></div>`;
+      <div class="mltotal"><div><div class="mlt-l">รวม · Total</div><div class="mlt-s">${ac.length === 1 ? esc(ac[0].name) : 'บัญชี'} ${mlm(t.bank)} + รายการ ${mlm(t.pending)}</div></div><div class="mlt-v" id="ml-total-foot">${mlm(t.total)}</div></div>`;
     $('#ml-empty').hidden = !!(ml.items.length || ml.bankUpdated);
 
     const rec = ml.items.filter(i => i.status === 'received').sort((a, b) => (b.receivedAt || 0) - (a.receivedAt || 0));
@@ -462,7 +487,7 @@
     $('#ml-snap-h').hidden = $('#ml-snaps').hidden = !snaps.length;
     $('#ml-snaps').innerHTML = snaps.map((s, i) => {
       const prev = snaps[i + 1]; const dlt = prev ? s.total - prev.total : 0;
-      return `<button class="snaprow" data-snap="${esc(s.id)}"><div class="it-main"><div class="it-title">${esc(fmtStamp(s.ts))}</div><div class="it-sub">Bank ${mlm(s.bank)} · Pending ${mlm(s.pending)}</div></div>
+      return `<button class="snaprow" data-snap="${esc(s.id)}"><div class="it-main"><div class="it-title">${esc(fmtStamp(s.ts))}</div><div class="it-sub">${s.accounts && s.accounts.length > 1 ? 'Accounts' : 'Bank'} ${mlm(s.bank)} · Pending ${mlm(s.pending)}</div></div>
         <div style="text-align:right"><div class="it-amt">${mlm(s.total)}</div>${prev && dlt ? `<div class="delta ${dlt > 0 ? 'up' : 'down'}">${mlm(dlt, { sign: true })}</div>` : ''}</div></button>`;
     }).join('');
   }
@@ -473,24 +498,54 @@
     inp.addEventListener('input', () => { let v = inp.value.replace(/,/g, '').replace(/[^\d.]/g, ''); const i = v.indexOf('.'); if (i >= 0) v = v.slice(0, i + 1) + v.slice(i + 1).replace(/\./g, '').slice(0, 2); if (v !== inp.value) inp.value = v; });
     return { box, inp };
   }
-  async function editBank() {
-    const { box, inp } = amountInput(state.ml.bankUpdated || state.ml.bank ? (state.ml.bank / 100).toFixed(2).replace(/\.00$/, '') : '');
-    const sub = document.createElement('div'); sub.className = 'dlg-sub';
-    sub.textContent = state.ml.bankUpdated ? 'Last updated ' + fmtStamp(state.ml.bankUpdated) : 'The stamp is set to now when you save.';
-    box.appendChild(sub);
-    const ok = await dialog({ title: 'Bank balance · เงินในธนาคาร', msg: 'Your current balance in the bank.', extra: box, buttons: [{ label: 'Cancel', value: false }, { label: 'Save', value: true, bold: true }] });
-    if (!ok) return;
-    const v = inp.value.trim() === '' ? 0 : L.toCents(inp.value);
-    if (!isFinite(v)) { toast('Invalid amount'); return; }
-    await mlSetBank(v); toast('Bank balance updated'); renderMoneyLeft();
+  // account sheet
+  let acform = null;
+  function openAcctSheet(acct) {
+    acform = { editing: acct || null, type: acct ? acct.type : 'bank' };
+    $('#ac-sheet-title').textContent = acct ? 'Edit Account' : 'New Account';
+    $('#ac-amount').value = acct && (acct.updated || acct.balance) ? (acct.balance / 100).toFixed(2).replace(/\.00$/, '') : '';
+    $('#ac-name').value = acct ? acct.name : '';
+    const canDel = !!acct && state.ml.accounts.length > 1;
+    $('#ac-delete-top').hidden = !canDel; $('#ac-err').hidden = true;
+    $('#ac-meta').textContent = acct ? (acct.updated ? 'Balance updated ' + fmtStamp(acct.updated) : 'Not set yet') + (state.ml.accounts.length === 1 ? ' · The last account can’t be deleted.' : '') : 'The updated time is set to now when you save.';
+    $('.ac-sym').textContent = state.settings.symbol;
+    acSetType(acform.type); showSheetEl($('#acctsheet'));
+    if (!acct) $('#ac-name').focus({ preventScroll: true });
+  }
+  function closeAcctSheet() { hideSheetEl($('#acctsheet')); acform = null; }
+  function acSetType(t) { if (acform) acform.type = t; $$('#ac-seg button').forEach(b => b.classList.toggle('on', b.dataset.type === t)); $('#ac-seg').classList.toggle('income', t === 'cash'); }
+  async function saveAcct() {
+    if (!acform) return;
+    const raw = $('#ac-amount').value.trim(); const v = raw === '' ? 0 : L.toCents(raw);
+    const name = $('#ac-name').value.trim();
+    const err = m => { $('#ac-err').textContent = m; $('#ac-err').hidden = false; };
+    if (!isFinite(v) || !Number.isInteger(v)) return err('Enter a valid balance.');
+    if (!name) return err('Enter a name · ใส่ชื่อบัญชี');
+    const now = Date.now(); const ed = acform.editing;
+    if (ed) {
+      const x = state.ml.accounts.find(a => a.id === ed.id); if (!x) return closeAcctSheet();
+      const changed = x.balance !== v || (!x.updated && raw !== '');
+      Object.assign(x, { name, type: acform.type, balance: v }); if (changed) x.updated = now;
+    } else {
+      const order = state.ml.accounts.reduce((m, a) => Math.max(m, a.order || 0), -1) + 1;
+      state.ml.accounts.push({ id: 'acct-' + L.uid(), name, type: acform.type, balance: v, updated: now, order, created: now });
+    }
+    await saveAccounts(); closeAcctSheet(); haptic(); toast(ed ? 'Account saved' : 'Account added · เพิ่มบัญชีแล้ว'); renderMoneyLeft();
+  }
+  async function deleteAcctById(id) {
+    const x = state.ml.accounts.find(a => a.id === id); if (!x) return;
+    if (state.ml.accounts.length <= 1) { closeOpenRow(); await dialog({ title: 'Keep one account', msg: 'You need at least one account. Set its balance to 0 instead.' }); return; }
+    if (!(await confirmDlg('Delete this account? · ลบบัญชี', `${x.name} · ${mlm(x.balance)}\nIts balance is removed from รวม. This can't be undone.`, 'Delete', true))) { closeOpenRow(); return; }
+    state.ml.accounts = state.ml.accounts.filter(a => a.id !== id); await saveAccounts();
+    openRow = null; if (acform) closeAcctSheet(); haptic(); toast('Account deleted'); renderMoneyLeft();
   }
   async function markReceived(it) {
-    const a = await dialog({ title: 'Mark as received? · ได้รับแล้ว', msg: `${it.name} · ${mlm(it.amount)}\n\nAdd it to your bank balance so the total stays the same?`,
+    const a = await dialog({ title: 'Mark as received? · ได้รับแล้ว', msg: `${it.name} · ${mlm(it.amount)}\n\nAdd it to ${primaryAccount().name} so the total stays the same?`,
       buttons: [{ label: `Received + add ${mlm(it.amount)} to bank`, value: 'bank', bold: true }, { label: 'Received only', value: 'only' }, { label: 'Cancel', value: null }] });
     if (!a) return;
     const now = Date.now();
     const upd = Object.assign({}, it, { status: 'received', receivedAt: now, addedToBank: a === 'bank', updated: now });
-    if (a === 'bank') await mlSetBank(state.ml.bank + it.amount, now);
+    if (a === 'bank') await mlAdjustPrimary(it.amount, now);
     await mlPutItem(upd); haptic();
     toast(a === 'bank' ? 'Received · added to bank' : 'Marked received'); renderMoneyLeft();
   }
@@ -501,11 +556,11 @@
     const a = await dialog({ title: 'Move back to pending?', msg: `${it.name} · ${mlm(it.amount)}`, buttons: btns, stack: true });
     if (!a) return;
     const now = Date.now();
-    if (a === 'bank') await mlSetBank(state.ml.bank - it.amount, now);
+    if (a === 'bank') await mlAdjustPrimary(-it.amount, now);
     await mlPutItem(Object.assign({}, it, { status: 'pending', receivedAt: null, addedToBank: false, updated: now }));
     toast('Moved to pending'); renderMoneyLeft();
   }
-  function mlCurrentText(ts) { return L.mlText(state.ml.bank, state.ml.items, ts == null ? Date.now() : ts); }
+  function mlCurrentText(ts) { return L.mlText(state.ml.accounts, state.ml.items, ts == null ? Date.now() : ts); }
   async function copyText(text) {
     try { await navigator.clipboard.writeText(text); return true; }
     catch (_) {
@@ -524,8 +579,8 @@
     return a;
   }
   async function saveSnapshot() {
-    const now = Date.now(); const t = L.mlTotals(state.ml.bank, state.ml.items);
-    const snap = { id: 's-' + L.uid(), ts: now, bank: t.bank, pending: t.pending, total: t.total,
+    const now = Date.now(); const t = L.mlTotals(state.ml.accounts, state.ml.items);
+    const snap = { id: 's-' + L.uid(), ts: now, bank: t.bank, pending: t.pending, total: t.total, accounts: state.ml.accounts.map(x => ({ name: x.name, type: x.type, balance: x.balance })),
       text: mlCurrentText(now) };
     await DB.putSnap(snap); state.ml.snaps.push(snap); haptic(); toast('Snapshot saved · ' + mlm(t.total)); renderMoneyLeft();
   }
@@ -592,11 +647,11 @@
     try {
       // keep the bank consistent when status changes inside the sheet
       if (it.status === 'received' && !wasRec) {
-        const add = await confirmDlg('Add to bank balance?', `${name} · ${mlm(amount)} received.\nAdd it to เงินในธนาคาร so the total stays the same?`, 'Add to bank');
-        if (add) { await mlSetBank(state.ml.bank + amount, now); it.addedToBank = true; }
+        const add = await confirmDlg('Add to bank balance?', `${name} · ${mlm(amount)} received.\nAdd it to ${primaryAccount().name} so the total stays the same?`, 'Add to bank');
+        if (add) { await mlAdjustPrimary(amount, now); it.addedToBank = true; }
       } else if (wasRec && it.status !== 'received' && prev.addedToBank) {
         const sub = await confirmDlg('Subtract from bank?', `${name} was added to the bank when received. Subtract ${mlm(prev.amount)} again?`, 'Subtract');
-        if (sub) await mlSetBank(state.ml.bank - prev.amount, now);
+        if (sub) await mlAdjustPrimary(-prev.amount, now);
         it.addedToBank = false;
       }
       await mlPutItem(it);
@@ -631,7 +686,7 @@
   // row gestures: tap = edit, hold 400ms = photo peek, swipe left = reveal Delete
   const DEL_W = 96;
   let openRow = null;
-  function setSlide(row, x, animate) { const s = $('.mlslide', row); if (!s) return; s.style.transition = animate ? '' : 'none'; s.style.transform = x ? `translateX(${x}px)` : ''; row.classList.toggle('open', x < 0); }
+  function setSlide(row, x, animate) { const s = $('.mlslide', row); if (!s) return; s.style.transition = animate ? '' : 'none'; s.style.transform = x ? `translateX(${x}px)` : ''; row.style.setProperty('--sw', Math.max(0, -x) + 'px'); row.classList.toggle('open', x < 0); }
   function closeOpenRow() { if (openRow) { setSlide(openRow, 0, true); openRow = null; } }
   async function deleteMLById(id) {
     const it = state.ml.items.find(x => x.id === id); if (!it) return;
@@ -682,6 +737,8 @@
     document.addEventListener('click', ev => {
       const d = root.contains(ev.target) && ev.target.closest('[data-del]');
       if (d) { ev.stopPropagation(); ev.preventDefault(); deleteMLById(d.dataset.del); return; }
+      const da = root.contains(ev.target) && ev.target.closest('[data-delacct]');
+      if (da) { ev.stopPropagation(); ev.preventDefault(); deleteAcctById(da.dataset.delacct); return; }
       if (suppressClick && root.contains(ev.target)) { suppressClick = false; ev.stopPropagation(); ev.preventDefault(); }
     }, true);
     root.addEventListener('contextmenu', ev => { if (ev.target.closest('.mlitem')) ev.preventDefault(); });
@@ -689,13 +746,21 @@
   }
   function bindMoneyLeft() {
     bindPeek();
-    $('#ml-bank-btn').addEventListener('click', editBank);
+    $('#ml-bank-btn').addEventListener('click', () => { if (state.ml.accounts.length === 1) openAcctSheet(state.ml.accounts[0]); else $('#ml-accts').scrollIntoView({ behavior: 'smooth', block: 'nearest' }); });
+    $('#ml-add-acct').addEventListener('click', () => openAcctSheet(null));
+    $('#ac-cancel').addEventListener('click', closeAcctSheet);
+    $('#ac-save').addEventListener('click', saveAcct);
+    $('#acform').addEventListener('submit', ev => { ev.preventDefault(); saveAcct(); });
+    $('#ac-delete-top').addEventListener('click', () => { if (acform && acform.editing) deleteAcctById(acform.editing.id); });
+    $('#ac-seg').addEventListener('click', ev => { const b = ev.target.closest('[data-type]'); if (b) acSetType(b.dataset.type); });
+    $('#ac-amount').addEventListener('input', () => { const inp = $('#ac-amount'); let v = inp.value.replace(/,/g, '').replace(/[^\d.-]/g, ''); const i = v.indexOf('.'); if (i >= 0) v = v.slice(0, i + 1) + v.slice(i + 1).replace(/\./g, '').slice(0, 2); if (v !== inp.value) inp.value = v; });
     $('#ml-snap').addEventListener('click', saveSnapshot);
     const doCopy = () => showTextDialog('Copy as text · คัดลอก', mlCurrentText());
     $('#ml-copy').addEventListener('click', doCopy); $('#ml-copy-top').addEventListener('click', doCopy);
     $('#view-moneyleft').addEventListener('click', ev => {
       const t = ev.target;
       let b;
+      if ((b = t.closest('[data-acct]'))) { const x = state.ml.accounts.find(a => a.id === b.dataset.acct); if (x) openAcctSheet(x); return; }
       if ((b = t.closest('[data-recv]'))) { const it = state.ml.items.find(i => i.id === b.dataset.recv); if (it) markReceived(it); return; }
       if ((b = t.closest('[data-unrecv]'))) { const it = state.ml.items.find(i => i.id === b.dataset.unrecv); if (it) markPending(it); return; }
       if ((b = t.closest('[data-mlitem]'))) { const it = state.ml.items.find(i => i.id === b.dataset.mlitem); if (it) openMLSheet(it); return; }
@@ -792,9 +857,9 @@
       o.thumb = it.thumb ? await blobToDataURL(it.thumb) : null;
       items.push(o);
     }
-    return { app: 'my-expenses', format: 3, appVersion: APP_VERSION, exportedAt: new Date().toISOString(),
+    return { app: 'my-expenses', format: 4, appVersion: APP_VERSION, exportedAt: new Date().toISOString(),
       settings: { start: state.settings.start, symbol: state.settings.symbol, customCats: state.settings.customCats }, entries,
-      moneyLeft: { bank: state.ml.bank, bankUpdated: state.ml.bankUpdated, groups: [], items, snapshots: state.ml.snaps.slice().sort((a, b) => a.ts - b.ts) } };
+      moneyLeft: { accounts: state.ml.accounts.map(x => Object.assign({}, x)), bank: state.ml.bank, bankUpdated: state.ml.bankUpdated, groups: [], items, snapshots: state.ml.snaps.slice().sort((a, b) => a.ts - b.ts) } };
   }
   async function exportBackup(mode) {
     if (!mode) mode = await dialog({ title: 'Export backup · สำรองข้อมูล', msg: 'An encrypted backup is protected by a passcode you choose (you need it to restore).',
@@ -836,8 +901,11 @@
       items.push(it);
     }
     const snaps = (Array.isArray(m.snapshots) ? m.snapshots : []).filter(x => x && x.id && Number.isFinite(+x.ts)).map(x => ({ id: String(x.id), ts: +x.ts, bank: Number(x.bank) || 0, pending: Number(x.pending) || 0, total: Number(x.total) || 0,
-      text: String(x.text || '') }));
-    return { bank: Number.isInteger(m.bank) ? m.bank : 0, bankUpdated: Number(m.bankUpdated) || null, items: L.flattenML(groups, items), snaps, bad }; // old grouped format is flattened
+      text: String(x.text || ''), accounts: Array.isArray(x.accounts) ? x.accounts : undefined }));
+    let accounts = L.normAccounts(m.accounts); // v1.4.0 format; older files have a single bank balance
+    if (!accounts.length) accounts = [L.legacyAccount(Number.isInteger(m.bank) ? m.bank : 0, m.bankUpdated)];
+    const legacyBank = !Array.isArray(m.accounts) || !m.accounts.length;
+    return { accounts, legacyBank, bank: L.acctTotal(accounts), bankUpdated: accounts.reduce((x, a) => Math.max(x, a.updated || 0), 0) || null, items: L.flattenML(groups, items), snaps, bad }; // old grouped format is flattened
   }
   function parseBackup(text) {
     let data; try { data = JSON.parse(text); } catch (_) { throw new Error('This file is not valid JSON.'); }
@@ -861,10 +929,18 @@
     for (const it of ml.items) if (it.photo && !it.thumb) { try { it.thumb = (await processPhoto(it.photo, 1600, 192)).thumb; } catch (_) {} }
     if (replace) {
       await DB.clearML();
-      await DB.setKV('mlBank', ml.bankUpdated || ml.bank ? { amount: ml.bank, updated: ml.bankUpdated } : null);
+      await DB.setKV('mlAccounts', ml.accounts); await DB.setKV('mlBank', null);
     } else {
       const cur = state.ml;
-      if (ml.bankUpdated && (!cur.bankUpdated || ml.bankUpdated > cur.bankUpdated)) await DB.setKV('mlBank', { amount: ml.bank, updated: ml.bankUpdated });
+      // merge accounts by id: newer balance wins, new accounts are added (an old file's bank merges into the main account)
+      const accts = cur.accounts.map(x => Object.assign({}, x));
+      for (const inc of ml.accounts) {
+        if (ml.legacyBank && !inc.updated && !inc.balance) continue;
+        const x = accts.find(a => a.id === inc.id);
+        if (!x) accts.push(Object.assign({}, inc, { order: accts.reduce((m, a) => Math.max(m, a.order || 0), -1) + 1 }));
+        else if (inc.updated && (!x.updated || inc.updated > x.updated)) Object.assign(x, ml.legacyBank ? { balance: inc.balance, updated: inc.updated } : inc);
+      }
+      await DB.setKV('mlAccounts', accts);
       const base = cur.items.length ? Math.max(...cur.items.map(i => i.order || 0)) + 1 : 0;
       const have = new Set(cur.items.map(i => i.id));
       ml.items = ml.items.map((it, k) => (have.has(it.id) ? it : Object.assign({}, it, { order: base + k })));
@@ -887,7 +963,7 @@
     try { parsed = parseBackup(text); } catch (e) { await dialog({ title: 'Can’t restore', msg: e.message }); return; }
     for (const e of parsed.entries) if (e.photo && !e.thumb) { try { e.thumb = (await processPhoto(e.photo, 1600, 192)).thumb; } catch (_) {} }
     const when = parsed.exportedAt ? new Date(parsed.exportedAt).toLocaleString('en-GB') : 'unknown date';
-    const mlDesc = parsed.ml ? `Main Money: bank ${money(parsed.ml.bank, { auto: true })}, ${parsed.ml.items.length} entries, ${parsed.ml.snaps.length} snapshots.` : '';
+    const mlDesc = parsed.ml ? `Main Money: ${parsed.ml.accounts.length > 1 ? parsed.ml.accounts.length + ' accounts' : 'bank'} ${money(parsed.ml.bank, { auto: true })}, ${parsed.ml.items.length} entries, ${parsed.ml.snaps.length} snapshots.` : '';
     const resetThumbs = () => { thumbURLs.forEach(v => revokeLater(v.url)); thumbURLs.clear(); };
 
     if (parsed.mlOnly) {
@@ -977,12 +1053,12 @@
   }
   function lockNow() {
     if (!DB.isEncrypted()) return;
-    if (form) closeSheet(); if (mlform) closeMLSheet(); closePeek(); if (!$('#viewer').hidden) closeViewer();
+    if (form) closeSheet(); if (mlform) closeMLSheet(); if (acform) closeAcctSheet(); closePeek(); if (!$('#viewer').hidden) closeViewer();
     $('#dlg').hidden = true;
     currentDEK = null; DB.setKey(null);
-    state.entries = []; state.ml = { bank: 0, bankUpdated: null, groups: [], items: [], snaps: [] };
+    state.entries = []; state.ml = { bank: 0, bankUpdated: null, accounts: [], groups: [], items: [], snaps: [] };
     thumbURLs.forEach(v => revokeLater(v.url)); thumbURLs.clear();
-    $('#ml-groups').innerHTML = ''; $('#ml-received').innerHTML = ''; $('#ml-snaps').innerHTML = ''; $('#list').innerHTML = '';
+    $('#ml-groups').innerHTML = ''; $('#ml-received').innerHTML = ''; $('#ml-snaps').innerHTML = ''; $('#ml-accts').innerHTML = ''; $('#list').innerHTML = '';
     showLock(true);
   }
   async function encryptSetup() {
@@ -1109,7 +1185,7 @@
     $('#catlist').addEventListener('click', ev => { const r = ev.target.closest('[data-cat]'); if (!r) return; state.filter = { month: state.sumMonth, category: r.dataset.cat, query: '' }; setView('moneyleft'); });
     // sheet
     $('#sheet-cancel').addEventListener('click', closeSheet);
-    $('#scrim').addEventListener('click', () => { if (mlform) closeMLSheet(); else closeSheet(); });
+    $('#scrim').addEventListener('click', () => { if (acform) closeAcctSheet(); else if (mlform) closeMLSheet(); else closeSheet(); });
     $('#sheet-save').addEventListener('click', saveForm);
     $('#form').addEventListener('submit', ev => { ev.preventDefault(); saveForm(); });
     $('#f-amount').addEventListener('input', ev => {

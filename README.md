@@ -18,3 +18,10 @@ Files: index.html, style.css, logic.js (pure logic), db.js (IndexedDB), app.js (
 - **If you forget the passcode AND lose Face ID access (new phone, reset, credential removed), the data cannot be recovered.** Keep an exported backup.
 - Backups are encrypted with a passcode you choose at export by default. Plain JSON export is available with a warning. Import accepts encrypted, plain and older backup formats.
 - No network requests are made. A strict Content-Security-Policy is set.
+
+## Accounts (v1.4.0)
+- The balance card holds a list of accounts. Each has a name, a type (Bank ธนาคาร / Cash เงินสด), a balance and its own last-updated time. The time is set only when that balance changes.
+- Use "+ Add account · เพิ่มบัญชี" to add one. Tap an account to edit it. Swipe left or use the header Delete to remove it. The last account can't be deleted.
+- รวม = all accounts + pending entries. "Received + add to bank" goes to the first Bank account.
+- The old single bank balance migrates to an account named เงินในธนาคาร and keeps its timestamp. Accounts are stored encrypted when encryption is on.
+- Backups are format 4 and include accounts. Older backups (single bank, grouped) still import.

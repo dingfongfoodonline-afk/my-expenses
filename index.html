@@ -82,9 +82,11 @@
       <div class="bc-label">Total · รวม</div>
       <div class="bc-amount" id="ml-total">฿0</div>
       <div class="bc-row">
-        <button class="bc-col btn" id="ml-bank-btn"><div class="mlcol"><div class="bc-sub">🏦 Bank · เงินในธนาคาร</div><div class="bc-val" id="ml-bank">฿0</div><div class="bc-tiny" id="ml-bank-upd">Tap to set</div></div></button>
+        <button class="bc-col btn" id="ml-bank-btn"><div class="mlcol"><div class="bc-sub" id="ml-bank-lbl">🏦 Bank · เงินในธนาคาร</div><div class="bc-val" id="ml-bank">฿0</div><div class="bc-tiny" id="ml-bank-upd">Tap to set</div></div></button>
         <div class="bc-col"><div class="mlcol"><div class="bc-sub">⏳ Pending · รอรับ</div><div class="bc-val" id="ml-pending">฿0</div><div class="bc-tiny" id="ml-pending-n">0 items</div></div></div>
       </div>
+      <div class="accts" id="ml-accts" hidden></div>
+      <button class="addacct" id="ml-add-acct">＋ Add account · เพิ่มบัญชี</button>
     </div>
 
     <div class="mlactions">
@@ -308,6 +310,35 @@
     </div>
     <button type="button" class="deletebtn" id="ml-delete" hidden>Delete item · ลบรายการ</button>
     <div class="meta" id="ml-meta"></div>
+  </form>
+</div>
+
+<!-- Account sheet -->
+<div class="sheet" id="acctsheet" role="dialog" aria-modal="true" aria-labelledby="ac-sheet-title" hidden>
+  <div class="grabber"></div>
+  <div class="sheet-head">
+    <button class="textbtn" id="ac-cancel">Cancel</button>
+    <div class="sheet-title" id="ac-sheet-title">New Account</div>
+    <div class="headright">
+      <button type="button" class="trashbtn" id="ac-delete-top" aria-label="Delete account" hidden><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg><span>Delete</span></button>
+      <button class="textbtn bold" id="ac-save">Save</button>
+    </div>
+  </div>
+  <form class="sheet-body" id="acform" novalidate autocomplete="off">
+    <div class="segmented" id="ac-seg">
+      <button type="button" data-type="bank" class="on">🏦 Bank · ธนาคาร</button>
+      <button type="button" data-type="cash">💵 Cash · เงินสด</button>
+      <span class="seg-thumb"></span>
+    </div>
+    <div class="amountwrap">
+      <span class="amount-sym ac-sym">฿</span>
+      <input id="ac-amount" class="amount" inputmode="decimal" placeholder="0" aria-label="Balance" enterkeyhint="done">
+    </div>
+    <div class="err" id="ac-err" hidden></div>
+    <div class="group">
+      <input class="fullinput" id="ac-name" maxlength="60" placeholder="Name · ชื่อบัญชี (e.g. KBank, เงินสด)">
+    </div>
+    <div class="meta" id="ac-meta"></div>
   </form>
 </div>
 

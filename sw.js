@@ -1,5 +1,5 @@
 /* Offline service worker: caches the app shell only (never your data). */
-const CACHE = 'my-expenses-v1.3.0';
+const CACHE = 'my-expenses-v1.4.0';
 const ASSETS = ['./', './index.html', './style.css', './logic.js', './vault.js', './db.js', './app.js', './manifest.json',
   './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png', './icons/apple-touch-icon.png'];
 

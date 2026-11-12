@@ -175,8 +175,23 @@
     return (items || []).slice().sort((a, b) => r(a) - r(b) || (a.order || 0) - (b.order || 0) || (a.created || 0) - (b.created || 0))
       .map((it, i) => Object.assign({}, it, { groupId: null, order: i }));
   }
+  // Accounts (v1.4.0): [{id,name,type:'bank'|'cash',balance,updated,order,created}]. `bank` args accept a number (old) or an accounts array.
+  const MAIN_ACCOUNT_ID = 'acct-main';
+  function sortAccounts(accts) { return (accts || []).slice().sort((a, b) => (a.order || 0) - (b.order || 0) || (a.created || 0) - (b.created || 0)); }
+  function acctTotal(bank) { return Array.isArray(bank) ? bank.reduce((s, a) => s + (Number(a.balance) || 0), 0) : (bank || 0); }
+  function legacyAccount(amount, updated) { return { id: MAIN_ACCOUNT_ID, name: 'เงินในธนาคาร', type: 'bank', balance: Number.isInteger(amount) ? amount : 0, updated: Number(updated) || null, order: 0, created: Number(updated) || 0 }; }
+  function normAccounts(list) {
+    const out = []; const seen = new Set();
+    for (const r of Array.isArray(list) ? list : []) {
+      if (!r || !r.id || seen.has(String(r.id))) continue;
+      const a = { id: String(r.id), name: String(r.name || '').trim().slice(0, 60) || 'Account', type: r.type === 'cash' ? 'cash' : 'bank',
+        balance: Number.isInteger(r.balance) ? r.balance : 0, updated: Number(r.updated) || null, order: Number.isFinite(+r.order) ? +r.order : out.length, created: Number(r.created) || 0 };
+      seen.add(a.id); out.push(a);
+    }
+    return sortAccounts(out);
+  }
   function mlTotals(bank, items) {
-    bank = bank || 0; let pending = 0, received = 0, pendingCount = 0;
+    bank = acctTotal(bank); let pending = 0, received = 0, pendingCount = 0;
     for (const it of items || []) { if (it.status === 'received') received += it.amount; else { pending += it.amount; pendingCount++; } }
     return { bank, pending, received, pendingCount, total: bank + pending };
   }
@@ -189,14 +204,14 @@
   function mlText(bank, items, ts) {
     const d = new Date(ts == null ? Date.now() : ts);
     const lines = [pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + '/' + d.getFullYear(), pad(d.getHours()) + '.' + pad(d.getMinutes()), '',
-      'เงินในธนาคาร ' + fmtPlain(bank || 0), ''];
+      ...(Array.isArray(bank) ? sortAccounts(bank).map(x => x.name + ' ' + fmtPlain(x.balance || 0)) : ['เงินในธนาคาร ' + fmtPlain(bank || 0)]), ''];
     for (const i of sortItems((items || []).filter(i => i.status !== 'received')))
       lines.push(i.name + ' ' + fmtPlain(i.amount) + (i.tag ? ' (' + i.tag + ')' : '') + (i.note ? ' – ' + i.note.replace(/\s+/g, ' ') : ''));
     lines.push('', 'รวม ' + fmtPlain(mlTotals(bank, items).total));
     return lines.join('\n');
   }
 
-  const api = { sortGroups, sortItems, flattenML, mlTotals, fmtPlain, mlText, EXPENSE_CATS, INCOME_CATS, PALETTE, allCategories, findCategory, toCents, fmtMoney, dayKey, monthKey, monthLabel,
+  const api = { MAIN_ACCOUNT_ID, sortAccounts, acctTotal, legacyAccount, normAccounts, sortGroups, sortItems, flattenML, mlTotals, fmtPlain, mlText, EXPENSE_CATS, INCOME_CATS, PALETTE, allCategories, findCategory, toCents, fmtMoney, dayKey, monthKey, monthLabel,
     addMonths, daysInMonth, dayLabel, toLocalInputs, fromLocalInputs, totals, filterEntries, sortNewest, groupByDay,
     monthSummary, monthsWithData, validateEntry, uid, slug };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Logic = api;
