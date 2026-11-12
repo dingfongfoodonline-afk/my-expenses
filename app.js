@@ -4,7 +4,7 @@
   const L = window.Logic;
   const $ = (s, el) => (el || document).querySelector(s);
   const $$ = (s, el) => Array.from((el || document).querySelectorAll(s));
-  const APP_VERSION = '1.0.0';
+  const APP_VERSION = '1.1.0';
 
   const state = {
     entries: [],
@@ -12,7 +12,8 @@
     filter: { month: 'all', category: 'all', query: '' },
     view: 'home',
     sumMonth: L.monthKey(Date.now()),
-    listLimit: 200
+    listLimit: 200,
+    ml: { bank: 0, bankUpdated: null, groups: [], items: [], snaps: [] }
   };
   const thumbURLs = new Map(); // id -> { blob, url }
   let form = null; // add/edit form state
@@ -74,6 +75,8 @@
     ]);
     state.entries = entries || [];
     state.settings = { start: start || 0, symbol: symbol || '฿', customCats: customCats || [] };
+    const [mlBank, mlGroups, mlItems, mlSnaps] = await Promise.all([DB.getKV('mlBank', null), DB.getKV('mlGroups', []), DB.allML(), DB.allSnaps()]);
+    state.ml = { bank: mlBank ? mlBank.amount || 0 : 0, bankUpdated: mlBank ? mlBank.updated || null : null, groups: mlGroups || [], items: mlItems || [], snaps: mlSnaps || [] };
   }
 
   // ---------- render: home ----------
@@ -209,6 +212,7 @@
       : `<div class="row"><span class="row-r">No custom categories yet</span></div>`;
     $('#custom-cats').hidden = false;
     $('#st-count').textContent = state.entries.length;
+    $('#st-mlcount').textContent = state.ml.items.length + (state.ml.snaps.length ? ' · ' + state.ml.snaps.length + ' snapshots' : '');
     if (navigator.storage && navigator.storage.estimate) navigator.storage.estimate().then(e => { $('#st-used').textContent = fmtBytes(e.usage); }).catch(() => {});
     if (navigator.storage && navigator.storage.persisted) navigator.storage.persisted().then(p => { $('#st-persist').textContent = p ? 'On ✓' : 'Not granted'; }).catch(() => { $('#st-persist').textContent = 'Unknown'; });
     else $('#st-persist').textContent = 'Not supported';
@@ -218,6 +222,7 @@
   function render() {
     if (state.view === 'home') renderHome();
     else if (state.view === 'summary') renderSummary();
+    else if (state.view === 'moneyleft') renderMoneyLeft();
     else renderSettings();
   }
 
@@ -296,19 +301,11 @@
     $('#amount-sym').textContent = state.settings.symbol;
     setType(form.type, true);
     renderPhoto();
-    const sh = $('#sheet'), sc = $('#scrim');
-    sh.hidden = false; sc.hidden = false; sh.style.transform = '';
-    $('.sheet-body', sh).scrollTop = 0;
-    document.body.style.overflow = 'hidden';
-    requestAnimationFrame(() => { sh.classList.add('show'); sc.classList.add('show'); });
+    showSheetEl($('#sheet'));
     if (!entry) $('#f-amount').focus({ preventScroll: true });
   }
   function closeSheet() {
-    const sh = $('#sheet'), sc = $('#scrim');
-    document.activeElement && document.activeElement.blur && document.activeElement.blur();
-    sh.classList.remove('show'); sc.classList.remove('show'); sh.style.transform = '';
-    document.body.style.overflow = '';
-    setTimeout(() => { if (!sh.classList.contains('show')) { sh.hidden = true; sc.hidden = true; } }, 340);
+    hideSheetEl($('#sheet'));
     if (formPhotoURL) { URL.revokeObjectURL(formPhotoURL); formPhotoURL = null; }
     form = null;
   }
@@ -379,8 +376,8 @@
   }
 
   // sheet drag-to-dismiss
-  function enableSheetDrag() {
-    const sh = $('#sheet'); const handle = [$('.grabber', sh), $('.sheet-head', sh)];
+  function enableSheetDrag(sh, close) {
+    const handle = [$('.grabber', sh), $('.sheet-head', sh)];
     let y0 = null, dy = 0;
     handle.forEach(h => {
       h.addEventListener('touchstart', ev => { if (ev.target.closest('button')) return; y0 = ev.touches[0].clientY; dy = 0; sh.style.transition = 'none'; }, { passive: true });
@@ -388,8 +385,330 @@
     window.addEventListener('touchmove', ev => { if (y0 == null) return; dy = Math.max(0, ev.touches[0].clientY - y0); sh.style.transform = `translateY(${dy}px)`; }, { passive: true });
     window.addEventListener('touchend', () => {
       if (y0 == null) return; y0 = null; sh.style.transition = '';
-      if (dy > 120) closeSheet(); else sh.style.transform = '';
+      if (dy > 120) close(); else sh.style.transform = '';
     });
+  }
+
+  // ---------- generic sheet helpers ----------
+  function showSheetEl(sh) {
+    const sc = $('#scrim');
+    sh.hidden = false; sc.hidden = false; sh.style.transform = '';
+    $('.sheet-body', sh).scrollTop = 0;
+    document.body.style.overflow = 'hidden';
+    requestAnimationFrame(() => { sh.classList.add('show'); sc.classList.add('show'); });
+  }
+  function hideSheetEl(sh) {
+    const sc = $('#scrim');
+    document.activeElement && document.activeElement.blur && document.activeElement.blur();
+    sh.classList.remove('show'); sc.classList.remove('show'); sh.style.transform = '';
+    document.body.style.overflow = '';
+    setTimeout(() => { if (!sh.classList.contains('show')) { sh.hidden = true; if (!$$('.sheet.show').length) sc.hidden = true; } }, 340);
+  }
+
+  // ---------- Money Left · เงินคงเหลือ ----------
+  let mlform = null; let mlPhotoURL = null;
+  function mlm(c, o) { return money(c, Object.assign({ auto: true }, o || {})); }
+  function fmtStamp(ts) {
+    const d = new Date(ts); const sameYear = d.getFullYear() === new Date().getFullYear();
+    return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: sameYear ? undefined : 'numeric' }) + ', ' + d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+  }
+  function mlGroupsSorted() { return L.sortGroups(state.ml.groups); }
+  function mlGroupName(id) { const g = state.ml.groups.find(x => x.id === id); return g ? g.name : 'Other'; }
+  async function mlSaveGroups() {
+    state.ml.groups = L.sortGroups(state.ml.groups).map((g, i) => Object.assign({}, g, { order: i }));
+    await DB.setKV('mlGroups', state.ml.groups);
+  }
+  async function mlSetBank(cents, ts) {
+    state.ml.bank = cents; state.ml.bankUpdated = ts || Date.now();
+    await DB.setKV('mlBank', { amount: state.ml.bank, updated: state.ml.bankUpdated });
+  }
+  async function mlPutItem(it) {
+    await DB.putML(it);
+    const i = state.ml.items.findIndex(x => x.id === it.id);
+    if (i >= 0) state.ml.items[i] = it; else state.ml.items.push(it);
+    dropThumb(it.id);
+  }
+  function mlItemHTML(it, rec) {
+    const url = thumbURL(it);
+    const ico = url ? `<div class="ico"><img src="${url}" alt="" loading="lazy"></div>` : '';
+    const sub = rec ? [esc(mlGroupName(it.groupId)), it.receivedAt ? 'received ' + esc(fmtStamp(it.receivedAt)) : null, it.addedToBank ? 'added to bank' : null].filter(Boolean).join(' · ')
+      : [it.note ? esc(it.note.split('\n')[0]) : null, it.photo ? '📷' : null].filter(Boolean).join(' · ');
+    return `<div class="mlitem ${rec ? 'rec' : ''}">
+      <button class="mlcheck ${rec ? 'done' : ''}" data-${rec ? 'unrecv' : 'recv'}="${esc(it.id)}" aria-label="${rec ? 'Move back to pending' : 'Mark received'}"><i></i></button>
+      <button class="mlbody" data-mlitem="${esc(it.id)}">${ico}<div class="it-main"><div class="it-title"><span class="t">${esc(it.name)}</span>${it.tag ? `<span class="tagpill">${esc(it.tag)}</span>` : ''}</div>${sub ? `<div class="it-sub">${sub}</div>` : ''}</div>
+      <div class="it-amt">${mlm(it.amount)}</div></button></div>`;
+  }
+  function renderMoneyLeft() {
+    const ml = state.ml;
+    const t = L.mlTotals(ml.bank, ml.groups, ml.items);
+    $('#ml-total').textContent = mlm(t.total);
+    $('#ml-bank').textContent = mlm(t.bank);
+    $('#ml-bank-upd').textContent = ml.bankUpdated ? 'Updated ' + fmtStamp(ml.bankUpdated) : 'Tap to set · แตะเพื่อใส่ยอด';
+    $('#ml-pending').textContent = mlm(t.pending);
+    const pc = ml.items.filter(i => i.status !== 'received').length;
+    $('#ml-pending-n').textContent = pc + (pc === 1 ? ' item' : ' items') + ' · ' + t.groups.filter(g => g.pendingCount).length + ' groups';
+
+    const pend = L.sortItems(ml.items.filter(i => i.status !== 'received'));
+    const known = new Set(ml.groups.map(g => g.id));
+    const html = [];
+    for (const g of t.groups) {
+      const its = pend.filter(i => (g.id == null ? !known.has(i.groupId) : i.groupId === g.id));
+      if (g.id == null && !its.length) continue;
+      html.push(`<div class="mlgroup"><div class="mlg-head"><div class="mlg-name">${esc(g.name)}</div><div class="mlg-right"><span class="mlg-sub">${mlm(g.pending)}</span>${g.id ? `<button class="mlg-more" data-gmore="${esc(g.id)}" aria-label="Group options">•••</button>` : ''}</div></div><div class="items">`);
+      for (const it of its) html.push(mlItemHTML(it, false));
+      html.push(`<button class="mladd" data-additem="${esc(g.id || '')}">＋ Add item · เพิ่มรายการ</button></div></div>`);
+    }
+    $('#ml-groups').innerHTML = html.join('');
+    $('#ml-empty').hidden = !!(ml.groups.length || ml.items.length || ml.bankUpdated);
+
+    const rec = ml.items.filter(i => i.status === 'received').sort((a, b) => (b.receivedAt || 0) - (a.receivedAt || 0));
+    $('#ml-rec-h').hidden = $('#ml-received').hidden = !rec.length;
+    $('#ml-received').innerHTML = rec.slice(0, 100).map(it => mlItemHTML(it, true)).join('');
+
+    const snaps = ml.snaps.slice().sort((a, b) => b.ts - a.ts);
+    $('#ml-snap-h').hidden = $('#ml-snaps').hidden = !snaps.length;
+    $('#ml-snaps').innerHTML = snaps.map((s, i) => {
+      const prev = snaps[i + 1]; const dlt = prev ? s.total - prev.total : 0;
+      return `<button class="snaprow" data-snap="${esc(s.id)}"><div class="it-main"><div class="it-title">${esc(fmtStamp(s.ts))}</div><div class="it-sub">Bank ${mlm(s.bank)} · Pending ${mlm(s.pending)}</div></div>
+        <div style="text-align:right"><div class="it-amt">${mlm(s.total)}</div>${prev && dlt ? `<div class="delta ${dlt > 0 ? 'up' : 'down'}">${mlm(dlt, { sign: true })}</div>` : ''}</div></button>`;
+    }).join('');
+  }
+  function amountInput(val) {
+    const box = document.createElement('div');
+    box.innerHTML = `<input class="dlg-input dlg-amount" inputmode="decimal" placeholder="0" value="${val}">`;
+    const inp = $('input', box);
+    inp.addEventListener('input', () => { let v = inp.value.replace(/,/g, '').replace(/[^\d.]/g, ''); const i = v.indexOf('.'); if (i >= 0) v = v.slice(0, i + 1) + v.slice(i + 1).replace(/\./g, '').slice(0, 2); if (v !== inp.value) inp.value = v; });
+    return { box, inp };
+  }
+  async function editBank() {
+    const { box, inp } = amountInput(state.ml.bankUpdated || state.ml.bank ? (state.ml.bank / 100).toFixed(2).replace(/\.00$/, '') : '');
+    const sub = document.createElement('div'); sub.className = 'dlg-sub';
+    sub.textContent = state.ml.bankUpdated ? 'Last updated ' + fmtStamp(state.ml.bankUpdated) : 'The stamp is set to now when you save.';
+    box.appendChild(sub);
+    const ok = await dialog({ title: 'Bank balance · เงินในธนาคาร', msg: 'Your current balance in the bank.', extra: box, buttons: [{ label: 'Cancel', value: false }, { label: 'Save', value: true, bold: true }] });
+    if (!ok) return;
+    const v = inp.value.trim() === '' ? 0 : L.toCents(inp.value);
+    if (!isFinite(v)) { toast('Invalid amount'); return; }
+    await mlSetBank(v); toast('Bank balance updated'); renderMoneyLeft();
+  }
+  async function groupNameDialog(title, current) {
+    const box = document.createElement('div');
+    box.innerHTML = `<input class="dlg-input" maxlength="40" placeholder="e.g. Savings Acc, เงินเดือน 11/2026">`;
+    $('input', box).value = current || '';
+    const ok = await dialog({ title, extra: box, buttons: [{ label: 'Cancel', value: false }, { label: 'Save', value: true, bold: true }] });
+    const name = $('input', box).value.trim();
+    return ok && name ? name : null;
+  }
+  async function addGroup() {
+    const name = await groupNameDialog('New group · กลุ่มใหม่');
+    if (!name) return null;
+    const g = { id: 'g-' + L.uid(), name, order: state.ml.groups.length };
+    state.ml.groups = state.ml.groups.concat([g]); await mlSaveGroups(); renderMoneyLeft();
+    return g;
+  }
+  async function groupMenu(id) {
+    const gs = mlGroupsSorted(); const idx = gs.findIndex(g => g.id === id); const g = gs[idx]; if (!g) return;
+    const n = state.ml.items.filter(i => i.groupId === id).length;
+    const btns = [{ label: 'Add item · เพิ่มรายการ', value: 'add', bold: true }, { label: 'Rename · เปลี่ยนชื่อ', value: 'rename' }];
+    if (idx > 0) btns.push({ label: 'Move up ↑', value: 'up' });
+    if (idx < gs.length - 1) btns.push({ label: 'Move down ↓', value: 'down' });
+    btns.push({ label: 'Delete group · ลบกลุ่ม', value: 'delete', danger: true }, { label: 'Cancel', value: null });
+    const a = await dialog({ title: g.name, msg: `${n} ${n === 1 ? 'item' : 'items'}`, buttons: btns, stack: true });
+    if (a === 'add') openMLSheet(null, id);
+    else if (a === 'rename') { const name = await groupNameDialog('Rename group', g.name); if (name) { g.name = name; state.ml.groups = state.ml.groups.map(x => (x.id === id ? Object.assign({}, x, { name }) : x)); await mlSaveGroups(); renderMoneyLeft(); } }
+    else if (a === 'up' || a === 'down') {
+      const j = a === 'up' ? idx - 1 : idx + 1; const order = gs.map(x => x.id); [order[idx], order[j]] = [order[j], order[idx]];
+      state.ml.groups = gs.map(x => Object.assign({}, x, { order: order.indexOf(x.id) })); await mlSaveGroups(); renderMoneyLeft();
+    } else if (a === 'delete') {
+      if (!(await confirmDlg(`Delete “${g.name}”?`, n ? `Its ${n} ${n === 1 ? 'item' : 'items'} (pending and received) will be deleted too.` : 'The group is empty.', 'Delete', true))) return;
+      const ids = state.ml.items.filter(i => i.groupId === id).map(i => i.id);
+      for (const iid of ids) { await DB.deleteML(iid); dropThumb(iid); }
+      state.ml.items = state.ml.items.filter(i => i.groupId !== id);
+      state.ml.groups = state.ml.groups.filter(x => x.id !== id); await mlSaveGroups(); toast('Group deleted'); renderMoneyLeft();
+    }
+  }
+  async function markReceived(it) {
+    const a = await dialog({ title: 'Mark as received? · ได้รับแล้ว', msg: `${it.name} · ${mlm(it.amount)}\n\nAdd it to your bank balance so the total stays the same?`,
+      buttons: [{ label: `Received + add ${mlm(it.amount)} to bank`, value: 'bank', bold: true }, { label: 'Received only', value: 'only' }, { label: 'Cancel', value: null }] });
+    if (!a) return;
+    const now = Date.now();
+    const upd = Object.assign({}, it, { status: 'received', receivedAt: now, addedToBank: a === 'bank', updated: now });
+    if (a === 'bank') await mlSetBank(state.ml.bank + it.amount, now);
+    await mlPutItem(upd); haptic();
+    toast(a === 'bank' ? 'Received · added to bank' : 'Marked received'); renderMoneyLeft();
+  }
+  async function markPending(it) {
+    const btns = [];
+    if (it.addedToBank) btns.push({ label: `Pending + subtract ${mlm(it.amount)} from bank`, value: 'bank', bold: true });
+    btns.push({ label: 'Back to pending', value: 'only', bold: !it.addedToBank }, { label: 'Cancel', value: null });
+    const a = await dialog({ title: 'Move back to pending?', msg: `${it.name} · ${mlm(it.amount)}`, buttons: btns, stack: true });
+    if (!a) return;
+    const now = Date.now();
+    if (a === 'bank') await mlSetBank(state.ml.bank - it.amount, now);
+    await mlPutItem(Object.assign({}, it, { status: 'pending', receivedAt: null, addedToBank: false, updated: now }));
+    toast('Moved to pending'); renderMoneyLeft();
+  }
+  function mlCurrentText(ts) { return L.mlText(state.ml.bank, state.ml.groups, state.ml.items, ts == null ? Date.now() : ts); }
+  async function copyText(text) {
+    try { await navigator.clipboard.writeText(text); return true; }
+    catch (_) {
+      const ta = document.createElement('textarea'); ta.value = text; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, text.length);
+      let ok = false; try { ok = document.execCommand('copy'); } catch (_) {} ta.remove(); return ok;
+    }
+  }
+  async function showTextDialog(title, text, extraBtns) {
+    const pre = document.createElement('div'); pre.className = 'dlg-pre'; pre.id = 'ml-text-preview'; pre.textContent = text;
+    const btns = [{ label: 'Copy · คัดลอก', value: 'copy', bold: true }];
+    if (navigator.share) btns.push({ label: 'Share…', value: 'share' });
+    const a = await dialog({ title, extra: pre, buttons: btns.concat(extraBtns || []).concat([{ label: 'Close', value: null }]), stack: true });
+    if (a === 'copy') toast((await copyText(text)) ? 'Copied · วางใน Notes หรือ LINE ได้เลย' : 'Copy failed — select the text and copy');
+    else if (a === 'share') { try { await navigator.share({ text }); } catch (_) {} }
+    return a;
+  }
+  async function saveSnapshot() {
+    const now = Date.now(); const t = L.mlTotals(state.ml.bank, state.ml.groups, state.ml.items);
+    const snap = { id: 's-' + L.uid(), ts: now, bank: t.bank, pending: t.pending, total: t.total,
+      groups: t.groups.filter(g => g.pendingCount).map(g => ({ name: g.name, pending: g.pending })), text: mlCurrentText(now) };
+    await DB.putSnap(snap); state.ml.snaps.push(snap); haptic(); toast('Snapshot saved · ' + mlm(t.total)); renderMoneyLeft();
+  }
+  async function openSnapshot(id) {
+    const s = state.ml.snaps.find(x => x.id === id); if (!s) return;
+    const a = await showTextDialog('Snapshot · ' + fmtStamp(s.ts), s.text || '', [{ label: 'Delete snapshot', value: 'del', danger: true }]);
+    if (a === 'del' && (await confirmDlg('Delete this snapshot?', fmtStamp(s.ts) + ' · ' + mlm(s.total), 'Delete', true))) {
+      await DB.deleteSnap(id); state.ml.snaps = state.ml.snaps.filter(x => x.id !== id); renderMoneyLeft();
+    }
+  }
+  // item sheet
+  function openMLSheet(item, groupId) {
+    mlform = { editing: item || null, status: item ? item.status || 'pending' : 'pending', groupId: item ? item.groupId : (groupId || (mlGroupsSorted()[0] || {}).id || null),
+      photo: item ? item.photo || null : null, thumb: item ? item.thumb || null : null };
+    $('#ml-sheet-title').textContent = item ? 'Edit Item' : 'New Item';
+    $('#ml-amount').value = item ? (item.amount / 100).toFixed(2).replace(/\.00$/, '') : '';
+    $('#ml-name').value = item ? item.name : '';
+    $('#ml-tag').value = item ? item.tag || '' : '';
+    $('#ml-note').value = item ? item.note || '' : '';
+    $('#ml-err').hidden = true; $('#ml-delete').hidden = !item;
+    $('#ml-meta').textContent = item ? 'Added ' + fmtStamp(item.created || Date.now()) + (item.receivedAt ? ' · Received ' + fmtStamp(item.receivedAt) : '') : '';
+    $('.ml-sym').textContent = state.settings.symbol;
+    mlSetStatus(mlform.status); mlRenderGroupChips(); mlRenderTagChips(); mlRenderPhoto();
+    showSheetEl($('#mlsheet'));
+    if (!item) $('#ml-amount').focus({ preventScroll: true });
+  }
+  function closeMLSheet() {
+    hideSheetEl($('#mlsheet'));
+    if (mlPhotoURL) { URL.revokeObjectURL(mlPhotoURL); mlPhotoURL = null; }
+    mlform = null;
+  }
+  function mlSetStatus(s) {
+    mlform.status = s;
+    $('#ml-seg').classList.toggle('income', s === 'received');
+    $$('#ml-seg button').forEach(b => b.classList.toggle('on', b.dataset.status === s));
+    $('#mlsheet').classList.toggle('mlrec', s === 'received');
+  }
+  function mlRenderGroupChips() {
+    $('#ml-groupchips').innerHTML = mlGroupsSorted().map(g => `<button type="button" class="chip ${g.id === mlform.groupId ? 'on' : ''}" data-g="${esc(g.id)}">${esc(g.name)}</button>`).join('') +
+      `<button type="button" class="chip" data-g="__new">＋ New group</button>`;
+  }
+  function mlRenderTagChips() {
+    const tags = new Set(['etax']); state.ml.items.forEach(i => i.tag && tags.add(i.tag));
+    const cur = $('#ml-tag').value.trim();
+    $('#ml-tagchips').innerHTML = [...tags].map(t => `<button type="button" class="chip ${t === cur ? 'on' : ''}" data-tag="${esc(t)}">${esc(t)}</button>`).join('');
+  }
+  function mlRenderPhoto() {
+    if (mlPhotoURL) { URL.revokeObjectURL(mlPhotoURL); mlPhotoURL = null; }
+    const has = !!(mlform && mlform.photo);
+    $('#ml-photo-add').hidden = has; $('#ml-photo-prev').hidden = !has;
+    if (has) { mlPhotoURL = URL.createObjectURL(mlform.photo); $('#ml-photo-img').src = mlPhotoURL; } else $('#ml-photo-img').removeAttribute('src');
+  }
+  async function saveMLForm() {
+    if (!mlform) return;
+    const err = $('#ml-err'); const show = m => { err.textContent = m; err.hidden = false; haptic(); };
+    const amount = L.toCents($('#ml-amount').value);
+    if (!isFinite(amount) || amount <= 0) { show('Enter an amount greater than 0'); $('#ml-amount').focus(); return; }
+    const name = $('#ml-name').value.trim();
+    if (!name) { show('Enter a name · ใส่ชื่อรายการ'); $('#ml-name').focus(); return; }
+    let groupId = mlform.groupId;
+    if (!groupId || !state.ml.groups.find(g => g.id === groupId)) {
+      let g = state.ml.groups.find(x => x.name === 'Other');
+      if (!g) { g = { id: 'g-' + L.uid(), name: 'Other', order: state.ml.groups.length }; state.ml.groups = state.ml.groups.concat([g]); await mlSaveGroups(); }
+      groupId = g.id;
+    }
+    const now = Date.now(); const prev = mlform.editing;
+    const sameGroup = state.ml.items.filter(i => i.groupId === groupId);
+    const base = prev || { id: 'i-' + L.uid(), created: now, order: sameGroup.length ? Math.max(...sameGroup.map(i => i.order || 0)) + 1 : 0 };
+    const it = Object.assign({}, base, { name, amount, groupId, tag: $('#ml-tag').value.trim(), note: $('#ml-note').value.trim(), status: mlform.status,
+      photo: mlform.photo || null, thumb: mlform.thumb || null, updated: now });
+    const wasRec = prev && prev.status === 'received';
+    if (it.status === 'received' && !wasRec) { it.receivedAt = now; it.addedToBank = false; }
+    if (it.status !== 'received') { it.receivedAt = null; }
+    const btn = $('#ml-save'); btn.disabled = true;
+    try {
+      // keep the bank consistent when status changes inside the sheet
+      if (it.status === 'received' && !wasRec) {
+        const add = await confirmDlg('Add to bank balance?', `${name} · ${mlm(amount)} received.\nAdd it to เงินในธนาคาร so the total stays the same?`, 'Add to bank');
+        if (add) { await mlSetBank(state.ml.bank + amount, now); it.addedToBank = true; }
+      } else if (wasRec && it.status !== 'received' && prev.addedToBank) {
+        const sub = await confirmDlg('Subtract from bank?', `${name} was added to the bank when received. Subtract ${mlm(prev.amount)} again?`, 'Subtract');
+        if (sub) await mlSetBank(state.ml.bank - prev.amount, now);
+        it.addedToBank = false;
+      }
+      await mlPutItem(it);
+      closeMLSheet(); haptic(); toast(prev ? 'Saved' : 'Item added'); requestPersist(); renderMoneyLeft();
+    } catch (e) { console.error(e); show('Could not save: ' + (e && e.message || e)); }
+    finally { btn.disabled = false; }
+  }
+  async function deleteMLItem() {
+    if (!mlform || !mlform.editing) return; const it = mlform.editing;
+    if (!(await confirmDlg('Delete this item?', `${it.name} · ${mlm(it.amount)}\nThis can't be undone.`, 'Delete', true))) return;
+    await DB.deleteML(it.id); state.ml.items = state.ml.items.filter(x => x.id !== it.id); dropThumb(it.id);
+    closeMLSheet(); toast('Deleted'); renderMoneyLeft();
+  }
+  function bindMoneyLeft() {
+    $('#ml-bank-btn').addEventListener('click', editBank);
+    $('#ml-snap').addEventListener('click', saveSnapshot);
+    const doCopy = () => showTextDialog('Copy as text · คัดลอก', mlCurrentText());
+    $('#ml-copy').addEventListener('click', doCopy); $('#ml-copy-top').addEventListener('click', doCopy);
+    $('#ml-addgroup').addEventListener('click', addGroup);
+    $('#view-moneyleft').addEventListener('click', ev => {
+      const t = ev.target;
+      let b;
+      if ((b = t.closest('[data-recv]'))) { const it = state.ml.items.find(i => i.id === b.dataset.recv); if (it) markReceived(it); return; }
+      if ((b = t.closest('[data-unrecv]'))) { const it = state.ml.items.find(i => i.id === b.dataset.unrecv); if (it) markPending(it); return; }
+      if ((b = t.closest('[data-mlitem]'))) { const it = state.ml.items.find(i => i.id === b.dataset.mlitem); if (it) openMLSheet(it); return; }
+      if ((b = t.closest('[data-additem]'))) { openMLSheet(null, b.dataset.additem || null); return; }
+      if ((b = t.closest('[data-gmore]'))) { groupMenu(b.dataset.gmore); return; }
+      if ((b = t.closest('[data-snap]'))) { openSnapshot(b.dataset.snap); return; }
+    });
+    $('#ml-cancel').addEventListener('click', closeMLSheet);
+    $('#ml-save').addEventListener('click', saveMLForm);
+    $('#mlform').addEventListener('submit', ev => { ev.preventDefault(); saveMLForm(); });
+    $('#ml-amount').addEventListener('input', ev => {
+      let v = ev.target.value.replace(/,/g, '').replace(/[^\d.]/g, '');
+      const i = v.indexOf('.'); if (i >= 0) v = v.slice(0, i + 1) + v.slice(i + 1).replace(/\./g, '').slice(0, 2);
+      if (v !== ev.target.value) ev.target.value = v; $('#ml-err').hidden = true;
+    });
+    $('#ml-seg').addEventListener('click', ev => { const b = ev.target.closest('[data-status]'); if (b && mlform) { mlSetStatus(b.dataset.status); haptic(); } });
+    $('#ml-groupchips').addEventListener('click', async ev => {
+      const b = ev.target.closest('[data-g]'); if (!b || !mlform) return;
+      if (b.dataset.g === '__new') { const g = await addGroup(); if (g && mlform) { mlform.groupId = g.id; } }
+      else mlform.groupId = b.dataset.g;
+      if (mlform) mlRenderGroupChips();
+    });
+    $('#ml-tagchips').addEventListener('click', ev => { const b = ev.target.closest('[data-tag]'); if (!b) return; const inp = $('#ml-tag'); inp.value = inp.value.trim() === b.dataset.tag ? '' : b.dataset.tag; mlRenderTagChips(); });
+    $('#ml-tag').addEventListener('input', mlRenderTagChips);
+    $('#ml-photo').addEventListener('change', async ev => {
+      const f = ev.target.files && ev.target.files[0]; ev.target.value = '';
+      if (!f || !mlform) return;
+      const add = $('#ml-photo-add span'); const old = add.textContent; add.textContent = 'Processing…';
+      try { const p = await processPhoto(f); if (mlform) { mlform.photo = p.photo; mlform.thumb = p.thumb; mlRenderPhoto(); toast('Photo attached · ' + fmtBytes(p.photo.size)); } }
+      catch (e) { dialog({ title: 'Photo problem', msg: (e && e.message) || 'Could not use that photo.' }); }
+      finally { add.textContent = old; }
+    });
+    $('#ml-photo-remove').addEventListener('click', () => { if (mlform) { mlform.photo = null; mlform.thumb = null; mlRenderPhoto(); } });
+    $('#ml-photo-view').addEventListener('click', () => { if (mlform && mlform.photo) openViewer(mlform.photo); });
+    $('#ml-photo-img').addEventListener('click', () => { if (mlform && mlform.photo) openViewer(mlform.photo); });
+    $('#ml-delete').addEventListener('click', deleteMLItem);
   }
 
   // ---------- custom categories ----------
@@ -449,8 +768,16 @@
       o.thumb = e.thumb ? await blobToDataURL(e.thumb) : null;
       entries.push(o);
     }
-    return { app: 'my-expenses', format: 1, appVersion: APP_VERSION, exportedAt: new Date().toISOString(),
-      settings: { start: state.settings.start, symbol: state.settings.symbol, customCats: state.settings.customCats }, entries };
+    const items = [];
+    for (const it of L.sortItems(state.ml.items)) {
+      const o = Object.assign({}, it);
+      o.photo = it.photo ? await blobToDataURL(it.photo) : null;
+      o.thumb = it.thumb ? await blobToDataURL(it.thumb) : null;
+      items.push(o);
+    }
+    return { app: 'my-expenses', format: 2, appVersion: APP_VERSION, exportedAt: new Date().toISOString(),
+      settings: { start: state.settings.start, symbol: state.settings.symbol, customCats: state.settings.customCats }, entries,
+      moneyLeft: { bank: state.ml.bank, bankUpdated: state.ml.bankUpdated, groups: L.sortGroups(state.ml.groups), items, snapshots: state.ml.snaps.slice().sort((a, b) => a.ts - b.ts) } };
   }
   async function exportBackup() {
     toast('Preparing backup…');
@@ -464,12 +791,28 @@
       const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
       document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
     };
-    const choice = await dialog({ title: 'Backup ready', msg: `${data.entries.length} entries · ${fmtBytes(blob.size)}\nSave it to Files or iCloud Drive.`,
+    const choice = await dialog({ title: 'Backup ready', msg: `${data.entries.length} entries · ${data.moneyLeft.items.length} Money Left items · ${fmtBytes(blob.size)}\nSave it to Files or iCloud Drive.`,
       buttons: (canShare ? [{ label: 'Share / Save to Files', value: 'share', bold: true }] : []).concat([{ label: 'Download', value: 'dl', bold: !canShare }, { label: 'Cancel', value: null }]) });
     if (choice === 'share') {
       try { await navigator.share({ files: [file], title: name }); await DB.setKV('lastBackup', Date.now()); }
       catch (e) { if (e && e.name !== 'AbortError') { download(); } }
     } else if (choice === 'dl') { download(); await DB.setKV('lastBackup', Date.now()); }
+  }
+  function parseMoneyLeft(m) {
+    if (!m || typeof m !== 'object') return null;
+    const groups = (Array.isArray(m.groups) ? m.groups : []).filter(g => g && g.id && g.name).map((g, i) => ({ id: String(g.id), name: String(g.name).slice(0, 60), order: Number.isFinite(+g.order) ? +g.order : i }));
+    const items = []; let bad = 0;
+    for (const r of Array.isArray(m.items) ? m.items : []) {
+      const it = { id: String(r.id || ''), groupId: r.groupId == null ? null : String(r.groupId), name: String(r.name || '').trim(), amount: Number(r.amount), tag: String(r.tag || ''), note: String(r.note || ''),
+        status: r.status === 'received' ? 'received' : 'pending', receivedAt: Number(r.receivedAt) || null, addedToBank: !!r.addedToBank,
+        order: Number(r.order) || 0, created: Number(r.created) || Date.now(), updated: Number(r.updated) || Number(r.created) || Date.now(), photo: null, thumb: null };
+      if (!it.id || !it.name || !Number.isInteger(it.amount) || it.amount <= 0) { bad++; continue; }
+      try { if (r.photo) it.photo = dataURLToBlob(r.photo); if (r.thumb) it.thumb = dataURLToBlob(r.thumb); } catch (_) {}
+      items.push(it);
+    }
+    const snaps = (Array.isArray(m.snapshots) ? m.snapshots : []).filter(x => x && x.id && Number.isFinite(+x.ts)).map(x => ({ id: String(x.id), ts: +x.ts, bank: Number(x.bank) || 0, pending: Number(x.pending) || 0, total: Number(x.total) || 0,
+      groups: Array.isArray(x.groups) ? x.groups : [], text: String(x.text || '') }));
+    return { bank: Number.isInteger(m.bank) ? m.bank : 0, bankUpdated: Number(m.bankUpdated) || null, groups, items, snaps, bad };
   }
   function parseBackup(text) {
     let data; try { data = JSON.parse(text); } catch (_) { throw new Error('This file is not valid JSON.'); }
@@ -483,21 +826,51 @@
       entries.push(e);
     }
     const s = data.settings || {};
-    return { entries, bad, settings: { start: Number.isInteger(s.start) ? s.start : 0, symbol: typeof s.symbol === 'string' && s.symbol ? s.symbol.slice(0, 4) : '฿', customCats: Array.isArray(s.customCats) ? s.customCats.filter(c => c && c.id && c.name) : [] }, exportedAt: data.exportedAt };
+    const ml = parseMoneyLeft(data.moneyLeft);
+    const partial = Array.isArray(data.partial) ? data.partial : null;
+    return { entries, bad, ml, mlOnly: !!(partial && partial.length === 1 && partial[0] === 'moneyLeft'),
+      settings: { start: Number.isInteger(s.start) ? s.start : 0, symbol: typeof s.symbol === 'string' && s.symbol ? s.symbol.slice(0, 4) : '฿', customCats: Array.isArray(s.customCats) ? s.customCats.filter(c => c && c.id && c.name) : [] }, exportedAt: data.exportedAt };
+  }
+  async function applyMoneyLeft(ml, replace) {
+    if (!ml) return;
+    for (const it of ml.items) if (it.photo && !it.thumb) { try { it.thumb = (await processPhoto(it.photo, 1600, 192)).thumb; } catch (_) {} }
+    if (replace) {
+      await DB.clearML();
+      await DB.setKV('mlBank', ml.bankUpdated || ml.bank ? { amount: ml.bank, updated: ml.bankUpdated } : null);
+      await DB.setKV('mlGroups', ml.groups);
+    } else {
+      const cur = state.ml;
+      if (ml.bankUpdated && (!cur.bankUpdated || ml.bankUpdated > cur.bankUpdated)) await DB.setKV('mlBank', { amount: ml.bank, updated: ml.bankUpdated });
+      const ids = new Set(cur.groups.map(g => g.id)); const base = cur.groups.length;
+      await DB.setKV('mlGroups', cur.groups.concat(ml.groups.filter(g => !ids.has(g.id)).map((g, i) => Object.assign({}, g, { order: base + i }))));
+    }
+    await DB.putMLs(ml.items); await DB.putSnaps(ml.snaps);
   }
   async function importBackup(file) {
     let parsed;
     try { parsed = parseBackup(await file.text()); } catch (e) { await dialog({ title: 'Can’t restore', msg: e.message }); return; }
-    // regenerate missing thumbnails
     for (const e of parsed.entries) if (e.photo && !e.thumb) { try { e.thumb = (await processPhoto(e.photo, 1600, 192)).thumb; } catch (_) {} }
     const when = parsed.exportedAt ? new Date(parsed.exportedAt).toLocaleString('en-GB') : 'unknown date';
-    const mode = await dialog({ title: 'Restore backup?', msg: `${parsed.entries.length} entries from ${when}.${parsed.bad ? `\n${parsed.bad} invalid entries will be skipped.` : ''}\n\nMerge keeps your current entries. Replace erases them first.`,
+    const mlDesc = parsed.ml ? `Money Left: bank ${money(parsed.ml.bank, { auto: true })}, ${parsed.ml.groups.length} groups, ${parsed.ml.items.length} items, ${parsed.ml.snaps.length} snapshots.` : '';
+    const resetThumbs = () => { thumbURLs.forEach(v => URL.revokeObjectURL(v.url)); thumbURLs.clear(); };
+
+    if (parsed.mlOnly) {
+      if (!parsed.ml) { await dialog({ title: 'Can’t restore', msg: 'This file has no Money Left data.' }); return; }
+      const mode = await dialog({ title: 'Restore Money Left?', msg: `${mlDesc}\nFrom ${when}. Your expense entries are not touched.\n\nMerge keeps your current Money Left data. Replace erases it first.`,
+        buttons: [{ label: 'Merge', value: 'merge', bold: true }, { label: 'Replace Money Left', value: 'replace', danger: true }, { label: 'Cancel', value: null }] });
+      if (!mode) return;
+      if (mode === 'replace' && (state.ml.items.length || state.ml.groups.length || state.ml.bankUpdated) &&
+        !(await confirmDlg('Replace Money Left?', `Your current bank balance, ${state.ml.groups.length} groups, ${state.ml.items.length} items and ${state.ml.snaps.length} snapshots will be erased.`, 'Replace', true))) return;
+      await applyMoneyLeft(parsed.ml, mode === 'replace');
+      await loadAll(); resetThumbs(); toast('Money Left restored'); requestPersist(); render(); return;
+    }
+
+    const mode = await dialog({ title: 'Restore backup?', msg: `${parsed.entries.length} entries from ${when}.${parsed.bad ? `\n${parsed.bad} invalid entries will be skipped.` : ''}${mlDesc ? '\n' + mlDesc : ''}\n\nMerge keeps your current data. Replace erases it first.`,
       buttons: [{ label: 'Merge', value: 'merge', bold: true }, { label: 'Replace everything', value: 'replace', danger: true }, { label: 'Cancel', value: null }] });
     if (!mode) return;
     if (mode === 'replace') {
-      if (!(await confirmDlg('Replace all data?', `Your current ${state.entries.length} entries will be erased.`, 'Replace', true))) return;
-      await DB.clearEntries();
-      thumbURLs.forEach(v => URL.revokeObjectURL(v.url)); thumbURLs.clear();
+      if (!(await confirmDlg('Replace all data?', `Your current ${state.entries.length} entries${parsed.ml ? ' and Money Left data' : ''} will be erased.`, 'Replace', true))) return;
+      await DB.clearEntries(); resetThumbs();
       state.settings = parsed.settings;
     } else if (!state.entries.length && !state.settings.start && !state.settings.customCats.length) {
       state.settings = parsed.settings; // fresh device: adopt the backup's settings too
@@ -507,9 +880,9 @@
     }
     await DB.putEntries(parsed.entries);
     await Promise.all([DB.setKV('start', state.settings.start), DB.setKV('symbol', state.settings.symbol), DB.setKV('customCats', state.settings.customCats)]);
-    await loadAll();
-    thumbURLs.forEach(v => URL.revokeObjectURL(v.url)); thumbURLs.clear();
-    toast(`Restored ${parsed.entries.length} entries`);
+    await applyMoneyLeft(parsed.ml, mode === 'replace');
+    await loadAll(); resetThumbs();
+    toast(`Restored ${parsed.entries.length} entries${parsed.ml ? ' + Money Left' : ''}`);
     requestPersist();
     render();
   }
@@ -527,7 +900,7 @@
   // ---------- events ----------
   function bind() {
     $('#tabbar').addEventListener('click', ev => { const t = ev.target.closest('.tab'); if (t) setView(t.dataset.view); });
-    $('#fab').addEventListener('click', () => openSheet(null));
+    $('#fab').addEventListener('click', () => { if (state.view === 'moneyleft') openMLSheet(null); else openSheet(null); });
     $('#btn-search-toggle').addEventListener('click', () => {
       const w = $('#searchwrap'); w.hidden = !w.hidden;
       if (!w.hidden) $('#search').focus(); else if (state.filter.query) { state.filter.query = ''; $('#search').value = ''; renderHome(); }
@@ -547,7 +920,7 @@
     $('#catlist').addEventListener('click', ev => { const r = ev.target.closest('[data-cat]'); if (!r) return; state.filter = { month: state.sumMonth, category: r.dataset.cat, query: '' }; setView('home'); });
     // sheet
     $('#sheet-cancel').addEventListener('click', closeSheet);
-    $('#scrim').addEventListener('click', closeSheet);
+    $('#scrim').addEventListener('click', () => { if (mlform) closeMLSheet(); else closeSheet(); });
     $('#sheet-save').addEventListener('click', saveForm);
     $('#form').addEventListener('submit', ev => { ev.preventDefault(); saveForm(); });
     $('#f-amount').addEventListener('input', ev => {
@@ -580,7 +953,7 @@
     $('#viewer').addEventListener('click', closeViewer);
     document.addEventListener('keydown', ev => {
       if (ev.key !== 'Escape') return;
-      if (!$('#viewer').hidden) closeViewer(); else if (form && $('#dlg').hidden) closeSheet();
+      if (!$('#viewer').hidden) closeViewer(); else if (!$('#dlg').hidden) return; else if (mlform) closeMLSheet(); else if (form) closeSheet();
     });
     // settings
     $('#set-start').addEventListener('change', async ev => {
@@ -596,14 +969,16 @@
     $('#btn-export').addEventListener('click', () => exportBackup().catch(e => dialog({ title: 'Export failed', msg: String(e && e.message || e) })));
     $('#import-file').addEventListener('change', ev => { const f = ev.target.files && ev.target.files[0]; ev.target.value = ''; if (f) importBackup(f).catch(e => dialog({ title: 'Restore failed', msg: String(e && e.message || e) })); });
     $('#btn-wipe').addEventListener('click', async () => {
-      if (!(await confirmDlg('Erase all data?', 'Every entry, photo and setting on this device will be deleted. Export a backup first if you might need it.', 'Erase', true))) return;
+      if (!(await confirmDlg('Erase all data?', 'Every entry, photo, setting and all Money Left data (bank, groups, items, snapshots) on this device will be deleted. Export a backup first if you might need it.', 'Erase', true))) return;
       if (!(await confirmDlg('Are you sure?', 'This cannot be undone.', 'Erase everything', true))) return;
       await DB.clearAll(); thumbURLs.forEach(v => URL.revokeObjectURL(v.url)); thumbURLs.clear();
       await loadAll(); state.filter = { month: 'all', category: 'all', query: '' }; toast('All data erased'); render();
     });
     // install hint
     $('#installhint-x').addEventListener('click', () => { $('#installhint').hidden = true; DB.setKV('hintDismissed', true); });
-    enableSheetDrag();
+    enableSheetDrag($('#sheet'), closeSheet);
+    enableSheetDrag($('#mlsheet'), closeMLSheet);
+    bindMoneyLeft();
     // refresh "Today"/"This month" labels when returning to the app
     document.addEventListener('visibilitychange', () => { if (!document.hidden) render(); });
   }
@@ -628,6 +1003,6 @@
   }
 
   // exposed for automated tests only
-  window.__app = { state, processPhoto, parseBackup, buildBackup, importBackup, render };
+  window.__app = { state, processPhoto, parseBackup, buildBackup, importBackup, render, mlCurrentText };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 })();

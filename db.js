@@ -2,7 +2,7 @@
 (function (root) {
   'use strict';
   const DB_NAME = 'my-expenses';
-  const DB_VER = 1;
+  const DB_VER = 2;
   let dbp = null;
 
   function open() {
@@ -16,6 +16,8 @@
           s.createIndex('ts', 'ts');
         }
         if (!db.objectStoreNames.contains('kv')) db.createObjectStore('kv', { keyPath: 'key' });
+        if (!db.objectStoreNames.contains('mlitems')) db.createObjectStore('mlitems', { keyPath: 'id' });
+        if (!db.objectStoreNames.contains('mlsnaps')) db.createObjectStore('mlsnaps', { keyPath: 'id' });
       };
       req.onsuccess = () => {
         const db = req.result;
@@ -51,7 +53,16 @@
     clearEntries() { return tx('entries', 'readwrite', s => { s.clear(); }); },
     getKV(key, dflt) { return tx('kv', 'readonly', s => reqP(s.get(key))).then(r => (r ? r.value : dflt)); },
     setKV(key, value) { return tx('kv', 'readwrite', s => { s.put({ key, value }); }); },
-    clearAll() { return Promise.all([tx('entries', 'readwrite', s => { s.clear(); }), tx('kv', 'readwrite', s => { s.clear(); })]); }
+    allML() { return tx('mlitems', 'readonly', s => reqP(s.getAll())); },
+    putML(i) { return tx('mlitems', 'readwrite', s => { s.put(i); }); },
+    putMLs(list) { return tx('mlitems', 'readwrite', s => { for (const i of list) s.put(i); }); },
+    deleteML(id) { return tx('mlitems', 'readwrite', s => { s.delete(id); }); },
+    clearML() { return Promise.all([tx('mlitems', 'readwrite', s => { s.clear(); }), tx('mlsnaps', 'readwrite', s => { s.clear(); })]); },
+    allSnaps() { return tx('mlsnaps', 'readonly', s => reqP(s.getAll())); },
+    putSnap(x) { return tx('mlsnaps', 'readwrite', s => { s.put(x); }); },
+    putSnaps(list) { return tx('mlsnaps', 'readwrite', s => { for (const x of list) s.put(x); }); },
+    deleteSnap(id) { return tx('mlsnaps', 'readwrite', s => { s.delete(id); }); },
+    clearAll() { return Promise.all(['entries', 'kv', 'mlitems', 'mlsnaps'].map(n => tx(n, 'readwrite', s => { s.clear(); }))); }
   };
   root.DB = DB;
 })(self);

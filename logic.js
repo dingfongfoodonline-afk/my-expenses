@@ -46,7 +46,7 @@
     opts = opts || {};
     const neg = cents < 0;
     const abs = Math.abs(cents) / 100;
-    const dec = opts.compact && abs >= 1000 ? 0 : 2;
+    const dec = (opts.compact && abs >= 1000) || (opts.auto && Math.abs(cents) % 100 === 0) ? 0 : 2;
     const s = abs.toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec });
     const sign = opts.sign ? (neg ? '−' : '+') : (neg ? '−' : '');
     return sign + symbol + s;
@@ -164,7 +164,46 @@
     return 'c-' + String(name).toLowerCase().trim().replace(/[^a-z0-9\u0E00-\u0E7F]+/g, '-').replace(/^-|-$/g, '') + '-' + Math.random().toString(36).slice(2, 6);
   }
 
-  const api = { EXPENSE_CATS, INCOME_CATS, PALETTE, allCategories, findCategory, toCents, fmtMoney, dayKey, monthKey, monthLabel,
+  // ---------- Money Left (เงินคงเหลือ) ----------
+  // bank: cents; groups: [{id,name,order}]; items: [{id,groupId,name,amount,tag,note,status:'pending'|'received',order,created}]
+  function sortGroups(groups) { return groups.slice().sort((a, b) => (a.order || 0) - (b.order || 0)); }
+  function sortItems(items) { return items.slice().sort((a, b) => (a.order || 0) - (b.order || 0) || (a.created || 0) - (b.created || 0)); }
+  function mlTotals(bank, groups, items) {
+    bank = bank || 0;
+    const gs = sortGroups(groups || []).map(g => ({ id: g.id, name: g.name, pending: 0, received: 0, pendingCount: 0, receivedCount: 0 }));
+    const byId = new Map(gs.map(g => [g.id, g]));
+    let pending = 0, received = 0, orphan = null;
+    for (const it of items || []) {
+      let g = byId.get(it.groupId);
+      if (!g) { if (!orphan) { orphan = { id: null, name: 'Other', pending: 0, received: 0, pendingCount: 0, receivedCount: 0 }; gs.push(orphan); } g = orphan; }
+      if (it.status === 'received') { received += it.amount; g.received += it.amount; g.receivedCount++; }
+      else { pending += it.amount; g.pending += it.amount; g.pendingCount++; }
+    }
+    return { bank, pending, received, total: bank + pending, groups: gs };
+  }
+  // Number like the user's Notes: 1,387,763 (decimals only when needed)
+  function fmtPlain(cents) {
+    const neg = cents < 0, abs = Math.abs(cents);
+    const dec = abs % 100 ? 2 : 0;
+    return (neg ? '-' : '') + (abs / 100).toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec });
+  }
+  function mlText(bank, groups, items, ts) {
+    const d = new Date(ts == null ? Date.now() : ts);
+    const lines = [pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + '/' + d.getFullYear(), pad(d.getHours()) + '.' + pad(d.getMinutes()), '',
+      'เงินในธนาคาร ' + fmtPlain(bank || 0)];
+    const t = mlTotals(bank, groups, items);
+    const pend = sortItems((items || []).filter(i => i.status !== 'received'));
+    for (const g of t.groups) {
+      const its = pend.filter(i => (g.id == null ? !(groups || []).some(x => x.id === i.groupId) : i.groupId === g.id));
+      if (!its.length) continue;
+      lines.push('', g.name);
+      for (const i of its) lines.push(i.name + ' ' + fmtPlain(i.amount) + (i.tag ? ' (' + i.tag + ')' : '') + (i.note ? ' – ' + i.note.replace(/\s+/g, ' ') : ''));
+    }
+    lines.push('', 'รวม ' + fmtPlain(t.total));
+    return lines.join('\n');
+  }
+
+  const api = { sortGroups, sortItems, mlTotals, fmtPlain, mlText, EXPENSE_CATS, INCOME_CATS, PALETTE, allCategories, findCategory, toCents, fmtMoney, dayKey, monthKey, monthLabel,
     addMonths, daysInMonth, dayLabel, toLocalInputs, fromLocalInputs, totals, filterEntries, sortNewest, groupByDay,
     monthSummary, monthsWithData, validateEntry, uid, slug };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Logic = api;
