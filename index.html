@@ -22,7 +22,7 @@
 <body>
 <div id="app">
   <!-- HOME -->
-  <section class="view active" id="view-home" aria-label="Expenses">
+  <section class="view" id="view-home" aria-label="Expenses (hidden)" hidden>
     <header class="largetitle">
       <div class="titlerow">
         <h1>My Expenses</h1>
@@ -33,13 +33,6 @@
     </header>
 
 <!-- Install hint (Safari, not installed) -->
-    <div class="installhint" id="installhint" hidden>
-      <div>
-        <b>Install on your iPhone</b>
-        <span>Tap <svg class="share" viewBox="0 0 24 24"><path d="M12 3v12M8 7l4-4 4 4"/><path d="M6 11v9h12v-9"/></svg> Share, then <b>Add to Home Screen</b>.</span>
-      </div>
-      <button class="iconbtn sm" id="installhint-x" aria-label="Dismiss">✕</button>
-    </div>
     <div class="balancecard" id="balancecard">
       <div class="bc-label">Balance</div>
       <div class="bc-amount" id="bc-balance">฿0.00</div>
@@ -70,13 +63,20 @@
   </section>
 
   <!-- MONEY LEFT -->
-  <section class="view" id="view-moneyleft" aria-label="Money Left">
+  <section class="view active" id="view-moneyleft" aria-label="Main Money">
     <header class="largetitle">
       <div class="titlerow">
-        <div><h1>Money Left</h1><div class="subtitle">เงินคงเหลือ</div></div>
+        <div><h1>Main Money</h1><div class="subtitle">เงินคงเหลือ</div></div>
         <button class="iconbtn" id="ml-copy-top" aria-label="Copy as text"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg></button>
       </div>
     </header>
+    <div class="installhint" id="installhint" hidden>
+      <div>
+        <b>Install on your iPhone</b>
+        <span>Tap <svg class="share" viewBox="0 0 24 24"><path d="M12 3v12M8 7l4-4 4 4"/><path d="M6 11v9h12v-9"/></svg> Share, then <b>Add to Home Screen</b>.</span>
+      </div>
+      <button class="iconbtn sm" id="installhint-x" aria-label="Dismiss">✕</button>
+    </div>
 
     <div class="mlcard">
       <div class="bc-label">Total · รวม</div>
@@ -93,11 +93,10 @@
     </div>
 
     <div id="ml-groups"></div>
-    <button class="addgroup" id="ml-addgroup">＋ Add group · เพิ่มกลุ่ม</button>
     <div class="empty" id="ml-empty" hidden>
       <div class="empty-art">💰</div>
       <h2>Track money still coming back</h2>
-      <p>Set your bank balance, then add groups (e.g. Savings Acc, Salary 11/2026) and items you will receive. Total = bank + pending.</p>
+      <p>Set your bank balance, then add entries you will receive (e.g. Savings Acc, เงินเดือน 11/2026). รวม = bank + entries.</p>
     </div>
 
     <div class="group-h" id="ml-rec-h" hidden>Received · ได้รับแล้ว</div>
@@ -108,7 +107,7 @@
   </section>
 
   <!-- SUMMARY -->
-  <section class="view" id="view-summary" aria-label="Summary">
+  <section class="view" id="view-summary" aria-label="Summary (hidden)" hidden>
     <header class="largetitle"><div class="titlerow"><h1>Summary</h1></div></header>
     <div class="monthnav">
       <button class="iconbtn" id="sum-prev" aria-label="Previous month"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button>
@@ -137,7 +136,7 @@
 
     <div class="group-h">Money</div>
     <div class="group">
-      <label class="row">
+      <label class="row" hidden>
         <span class="row-l">Starting balance</span>
         <input class="row-input" id="set-start" inputmode="decimal" placeholder="0.00" autocomplete="off">
       </label>
@@ -146,13 +145,27 @@
         <input class="row-input" id="set-symbol" maxlength="4" placeholder="฿" autocomplete="off">
       </label>
     </div>
-    <div class="group-f">Balance = starting balance + money added − money spent.</div>
+    <div class="group-f" hidden>Balance = starting balance + money added − money spent.</div>
 
-    <div class="group-h">Categories</div>
-    <div class="group" id="custom-cats"></div>
-    <div class="group">
+    <div class="group-h" hidden>Categories</div>
+    <div class="group" id="custom-cats" hidden></div>
+    <div class="group" hidden>
       <button class="row link" id="btn-add-cat"><span class="row-l">＋ Add custom category</span></button>
     </div>
+
+    <div class="group-h">Security · ความปลอดภัย</div>
+    <div class="group" id="sec-off">
+      <button class="row link" id="btn-encrypt"><span class="row-l">🔐 Encrypt &amp; Lock</span><span class="chev">›</span></button>
+    </div>
+    <div class="group" id="sec-on" hidden>
+      <div class="row"><span class="row-l">Encryption</span><span class="row-r">On · AES-256</span></div>
+      <div class="row"><span class="row-l">Face ID unlock</span><span class="row-r" id="sec-face">—</span></div>
+      <button class="row link" id="btn-lock-now"><span class="row-l">Lock now</span></button>
+      <button class="row link" id="btn-change-pass"><span class="row-l">Change passcode</span></button>
+      <button class="row link" id="btn-face-enroll"><span class="row-l">Set up Face ID again</span></button>
+      <button class="row danger" id="btn-decrypt"><span class="row-l">Turn off encryption</span></button>
+    </div>
+    <div class="group-f" id="sec-note"></div>
 
     <div class="group-h">Backup</div>
     <div class="group">
@@ -164,8 +177,8 @@
 
     <div class="group-h">Storage</div>
     <div class="group">
-      <div class="row"><span class="row-l">Entries</span><span class="row-r" id="st-count">0</span></div>
-      <div class="row"><span class="row-l">Money Left items</span><span class="row-r" id="st-mlcount">0</span></div>
+      <div class="row" id="st-count-row" hidden><span class="row-l">Older expense entries</span><span class="row-r" id="st-count">0</span></div>
+      <div class="row"><span class="row-l">Items</span><span class="row-r" id="st-mlcount">0</span></div>
       <div class="row"><span class="row-l">Space used</span><span class="row-r" id="st-used">—</span></div>
       <div class="row"><span class="row-l">Persistent storage</span><span class="row-r" id="st-persist">—</span></div>
     </div>
@@ -180,9 +193,7 @@
 
 <!-- Tab bar -->
 <nav class="tabbar" id="tabbar">
-  <button class="tab active" data-view="home"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span>Entries</span></button>
-  <button class="tab" data-view="moneyleft"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10h18"/><circle cx="16.5" cy="14.5" r="1.3"/></svg><span>Money Left</span></button>
-  <button class="tab" data-view="summary"><svg viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9h-9z"/><path d="M15 3.5A9 9 0 0 1 20.5 9H15z"/></svg><span>Summary</span></button>
+  <button class="tab active" data-view="moneyleft"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10h18"/><circle cx="16.5" cy="14.5" r="1.3"/></svg><span>Main Money</span></button>
   <button class="tab" data-view="settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>Settings</span></button>
 </nav>
 <button class="fab" id="fab" aria-label="Add entry"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
@@ -249,7 +260,10 @@
   <div class="sheet-head">
     <button class="textbtn" id="ml-cancel">Cancel</button>
     <div class="sheet-title" id="ml-sheet-title">New Item</div>
-    <button class="textbtn bold" id="ml-save">Save</button>
+    <div class="headright">
+      <button type="button" class="trashbtn" id="ml-delete-top" aria-label="Delete item" hidden><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v6M14 11v6"/></svg><span>Delete</span></button>
+      <button class="textbtn bold" id="ml-save">Save</button>
+    </div>
   </div>
   <form class="sheet-body" id="mlform" novalidate autocomplete="off">
     <div class="segmented" id="ml-seg">
@@ -263,10 +277,11 @@
     </div>
     <div class="err" id="ml-err" hidden></div>
     <div class="group">
-      <input class="fullinput" id="ml-name" maxlength="80" placeholder="Name · ชื่อรายการ (e.g. AIA, Adobe 11/26)">
+      <input class="fullinput" id="ml-name" maxlength="80" placeholder="Name · ชื่อรายการ (e.g. Savings Acc, AIA)">
     </div>
-    <div class="flabel">Group · กลุ่ม</div>
-    <div class="chips wrap" id="ml-groupchips"></div>
+    <div class="group">
+      <label class="row"><span class="row-l">Date · วันที่ <span class="muted">(optional)</span></span><input class="row-input" type="date" id="ml-date"></label>
+    </div>
     <div class="flabel">Tag · แท็ก <span class="muted">(optional)</span></div>
     <div class="group">
       <input class="fullinput" id="ml-tag" maxlength="24" placeholder="e.g. etax">
@@ -291,7 +306,7 @@
       </div>
       <input type="file" id="ml-photo" accept="image/*" hidden>
     </div>
-    <button type="button" class="deletebtn" id="ml-delete" hidden>Delete item</button>
+    <button type="button" class="deletebtn" id="ml-delete" hidden>Delete item · ลบรายการ</button>
     <div class="meta" id="ml-meta"></div>
   </form>
 </div>
@@ -300,6 +315,31 @@
 <div class="viewer" id="viewer" hidden>
   <img id="viewer-img" alt="Photo">
   <button class="viewer-x" id="viewer-x" aria-label="Close">✕</button>
+</div>
+
+<!-- Lock screen -->
+<div class="lock" id="lock" hidden>
+  <div class="lock-inner">
+    <div class="lock-ic"><svg viewBox="0 0 24 24"><rect x="5" y="10.5" width="14" height="10" rx="2.5"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/></svg></div>
+    <h2>My Money is locked</h2>
+    <p>ล็อกอยู่ · Your data is encrypted on this iPhone.</p>
+    <button class="lockbtn" id="lock-face"><svg viewBox="0 0 24 24"><path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2"/><path d="M9 9v1.5M15 9v1.5M12 9v4h-1M9.5 15.5a3.5 3.5 0 0 0 5 0"/></svg>Unlock with Face ID</button>
+    <button class="lockalt" id="lock-usepass">Use passcode</button>
+    <form id="lock-passform" hidden autocomplete="off">
+      <input type="password" id="lock-pass" placeholder="Passcode" autocomplete="current-password" enterkeyhint="go">
+      <button class="lockbtn" type="submit">Unlock</button>
+    </form>
+    <div class="lock-err" id="lock-err" role="alert"></div>
+    <div class="lock-note" id="lock-note"></div>
+  </div>
+</div>
+
+<!-- Long-press photo peek -->
+<div class="peek" id="peek" hidden>
+  <div class="peek-card">
+    <img id="peek-img" alt="Photo preview" draggable="false">
+    <div class="peek-cap"><span id="peek-name"></span><b id="peek-amt"></b></div>
+  </div>
 </div>
 
 <!-- Dialog -->
@@ -313,6 +353,7 @@
 <div class="toast" id="toast" hidden></div>
 
 <script src="logic.js"></script>
+<script src="vault.js"></script>
 <script src="db.js"></script>
 <script src="app.js"></script>
 </body>
