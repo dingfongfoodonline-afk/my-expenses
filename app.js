@@ -4,7 +4,7 @@
   const L = window.Logic;
   const $ = (s, el) => (el || document).querySelector(s);
   const $$ = (s, el) => Array.from((el || document).querySelectorAll(s));
-  const APP_VERSION = '1.5.0';
+  const APP_VERSION = '1.6.0';
 
   const state = {
     entries: [],
@@ -13,7 +13,8 @@
     view: 'moneyleft',
     sumMonth: L.monthKey(Date.now()),
     listLimit: 200,
-    ml: { bank: 0, bankUpdated: null, accounts: [], groups: [], items: [], snaps: [] }
+    ml: { bank: 0, bankUpdated: null, accounts: [], groups: [], items: [], snaps: [] },
+    mm: { items: [] }
   };
   const thumbURLs = new Map(); // id -> { blob, url }
   let form = null; // add/edit form state
@@ -87,6 +88,7 @@
       await DB.setKV('mlAccounts', accounts); if (mlBank) await DB.setKV('mlBank', null);
     }
     state.ml = { bank: 0, bankUpdated: null, accounts, groups: [], items, snaps: mlSnaps || [] }; syncBank();
+    state.mm = { items: (await DB.allMM()) || [] };
   }
 
   // ---------- render: home ----------
@@ -234,6 +236,7 @@
     if (state.view === 'home') renderHome();
     else if (state.view === 'summary') renderSummary();
     else if (state.view === 'moneyleft') renderMoneyLeft();
+    else if (state.view === 'mother') renderMother();
     else renderSettings();
   }
 
@@ -241,7 +244,7 @@
     state.view = v;
     $$('.view').forEach(s => s.classList.toggle('active', s.id === 'view-' + v));
     $$('.tab').forEach(t => t.classList.toggle('active', t.dataset.view === v));
-    $('#fab').hidden = v !== 'moneyleft';
+    $('#fab').hidden = v !== 'moneyleft' && v !== 'mother';
     render();
     window.scrollTo(0, 0);
   }
@@ -445,23 +448,109 @@
       <div class="mlslide"><button class="acctbody" data-acct="${esc(x.id)}"><span class="acct-ic">${ACCT_ICON[x.type]}</span><div class="it-main"><div class="it-title"><span class="t">${esc(x.name)}</span></div>
       <div class="it-sub">${acctTypeLabel(x.type)} · ${x.updated ? 'Updated ' + esc(fmtStamp(x.updated)) : 'Tap to set'}</div></div><div class="it-amt">${mlm(x.balance)}</div></button></div></div>`;
   }
-  async function mlPutItem(it) {
-    await DB.putML(it);
-    const i = state.ml.items.findIndex(x => x.id === it.id);
-    if (i >= 0) state.ml.items[i] = it; else state.ml.items.push(it);
+  // Two books share the item UI: 'ml' = Main Money entries, 'mm' = Money Mother (separate store, separate totals)
+  function bookItems(book) { return book === 'mm' ? state.mm.items : state.ml.items; }
+  function bookOf(id) { return state.mm.items.some(x => x.id === id) ? 'mm' : 'ml'; }
+  function findItem(id) { return state.ml.items.find(x => x.id === id) || state.mm.items.find(x => x.id === id) || null; }
+  async function putBookItem(book, it) {
+    const list = bookItems(book);
+    await (book === 'mm' ? DB.putMM(it) : DB.putML(it));
+    const i = list.findIndex(x => x.id === it.id);
+    if (i >= 0) list[i] = it; else list.push(it);
     dropThumb(it.id);
   }
-  function mlItemHTML(it, rec) {
-    const url = thumbURL(it);
+  async function deleteBookItem(book, id) {
+    await (book === 'mm' ? DB.deleteMM(id) : DB.deleteML(id));
+    if (book === 'mm') state.mm.items = state.mm.items.filter(x => x.id !== id); else state.ml.items = state.ml.items.filter(x => x.id !== id);
+    dropThumb(id);
+  }
+  async function mlPutItem(it) { return putBookItem('ml', it); }
+  function mlItemHTML(it, rec, book) {
+    const url = thumbURL(it); const mm = book === 'mm';
     const ico = url ? `<div class="ico"><img src="${url}" alt="" loading="lazy" draggable="false"><span class="badge">📷</span></div>` : '';
-    const sub = rec ? [it.receivedAt ? 'received ' + esc(fmtStamp(it.receivedAt)) : null, it.addedToBank ? 'added to bank' : null].filter(Boolean).join(' · ')
+    const sub = rec ? [it.receivedAt ? (mm ? 'repaid ' : 'received ') + esc(fmtStamp(it.receivedAt)) : null, it.addedToBank ? 'added to bank' : null, mm && it.date ? 'spent ' + esc(fmtDate(it.date)) : null].filter(Boolean).join(' · ')
       : [it.date ? esc(fmtDate(it.date)) : null, it.note ? esc(it.note.split('\n')[0]) : null, it.photo ? '📷' : null].filter(Boolean).join(' · ');
     return `<div class="mlitem ${rec ? 'rec' : ''}" data-id="${esc(it.id)}" data-peek="${it.photo ? esc(it.id) : ''}">
       <button class="mldel" data-del="${esc(it.id)}" aria-label="Delete ${esc(it.name)}"><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg><span>Delete · ลบ</span></button>
-      <div class="mlslide"><button class="mlcheck ${rec ? 'done' : ''}" data-${rec ? 'unrecv' : 'recv'}="${esc(it.id)}" aria-label="${rec ? 'Move back to pending' : 'Mark received'}"><i></i></button>
+      <div class="mlslide"><button class="mlcheck ${rec ? 'done' : ''}" data-${rec ? 'unrecv' : 'recv'}="${esc(it.id)}" aria-label="${rec ? (mm ? 'Move back to owed' : 'Move back to pending') : (mm ? 'Mark repaid' : 'Mark received')}"><i></i></button>
       <button class="mlbody" data-mlitem="${esc(it.id)}">${ico}<div class="it-main"><div class="it-title"><span class="t">${esc(it.name)}</span>${it.tag ? `<span class="tagpill">${esc(it.tag)}</span>` : ''}</div>${sub ? `<div class="it-sub">${sub}</div>` : ''}</div>
       <div class="it-amt">${mlm(it.amount)}</div></button></div></div>`;
   }
+  function renderMother() {
+    const items = state.mm.items, t = L.mmTotals(items);
+    $('#mm-owed').textContent = mlm(t.owed); $('#mm-owed-2').textContent = mlm(t.owed);
+    $('#mm-owed-n').textContent = t.owedCount + (t.owedCount === 1 ? ' item' : ' items');
+    $('#mm-repaid').textContent = mlm(t.repaid);
+    $('#mm-repaid-n').textContent = t.repaidCount + (t.repaidCount === 1 ? ' item' : ' items');
+    const owed = L.sortItems(items.filter(i => i.status !== 'received'));
+    $('#mm-list').innerHTML = `<div class="flabel">Mom owes · แม่ค้าง</div><div class="items">${owed.map(it => mlItemHTML(it, false, 'mm')).join('')}<button class="mladd" data-additem="mm">＋ Add item · เพิ่มรายการ</button></div>
+      <div class="mltotal"><div><div class="mlt-l">Outstanding · ค้างอยู่</div><div class="mlt-s">${t.owedCount} owed · repaid ${mlm(t.repaid)}</div></div><div class="mlt-v" id="mm-total-foot">${mlm(t.owed)}</div></div>`;
+    $('#mm-empty').hidden = !!items.length;
+    const rec = items.filter(i => i.status === 'received').sort((a, b) => (b.receivedAt || 0) - (a.receivedAt || 0));
+    $('#mm-rec-h').hidden = $('#mm-received').hidden = !rec.length;
+    $('#mm-received').innerHTML = rec.slice(0, 200).map(it => mlItemHTML(it, true, 'mm')).join('');
+  }
+  async function markRepaid(it) {
+    if (!(await confirmDlg('Mark as repaid? · แม่คืนแล้ว', `${it.name} · ${mlm(it.amount)}`, 'Repaid'))) return;
+    const now = Date.now(); await putBookItem('mm', Object.assign({}, it, { status: 'received', receivedAt: now, updated: now })); haptic(); toast('Marked repaid · คืนแล้ว'); render();
+  }
+  async function markOwed(it) {
+    if (!(await confirmDlg('Move back to owed?', `${it.name} · ${mlm(it.amount)}`, 'Move back'))) return;
+    await putBookItem('mm', Object.assign({}, it, { status: 'pending', receivedAt: null, updated: Date.now() })); toast('Moved back to owed'); render();
+  }
+  // ---------- designed report export (PNG via canvas, on-device; Print / PDF via print stylesheet) ----------
+  let lastExport = null;
+  function fullStamp(ts) { return new Date(ts).toLocaleString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }); }
+  function cardOf(it, book, rec) {
+    const when = [it.date ? fmtDate(it.date) : null, rec && it.receivedAt ? (book === 'mm' ? 'repaid ' : 'received ') + fullStamp(it.receivedAt) : 'added ' + fullStamp(it.created || it.updated || Date.now())].filter(Boolean).join(' · ');
+    const badge = book === 'mm' ? (rec ? { badge: 'Repaid · คืนแล้ว' } : { badge: 'Owed · ค้าง', badgeBg: '#FFF7ED', badgeColor: '#C2410C' }) : (rec ? { badge: 'Received' } : {});
+    return Object.assign({ name: it.name, amount: mlm(it.amount), when, tag: it.tag || '', note: it.note || '', photo: it.photo || null, muted: !!rec }, badge);
+  }
+  function mlReportModel() {
+    const ml = state.ml, t = L.mlTotals(ml.accounts, ml.items), now = Date.now();
+    const pend = L.sortItems(ml.items.filter(i => i.status !== 'received'));
+    const rec = ml.items.filter(i => i.status === 'received').sort((a, b) => (b.receivedAt || 0) - (a.receivedAt || 0)).slice(0, 50);
+    return { theme: 'main', title: 'Main Money', subtitle: 'เงินคงเหลือ', stamp: fullStamp(now), hero: { label: 'Total · รวม', value: mlm(t.total) },
+      stats: [{ label: 'Accounts · บัญชี', value: mlm(t.bank), sub: ml.accounts.length + (ml.accounts.length === 1 ? ' account' : ' accounts') },
+        { label: 'Pending · รอรับ', value: mlm(t.pending), sub: t.pendingCount + (t.pendingCount === 1 ? ' entry' : ' entries') }],
+      rows: ml.accounts.map(x => ({ icon: ACCT_ICON[x.type], label: x.name, sub: acctTypeLabel(x.type) + (x.updated ? ' · updated ' + fullStamp(x.updated) : ''), value: mlm(x.balance) }))
+        .concat([{ icon: '⏳', label: 'Entries · รายการ', sub: t.pendingCount + ' pending', value: mlm(t.pending) }, { icon: '🧮', label: 'รวม · Total', sub: 'accounts + entries', value: mlm(t.total), bold: true }]),
+      sections: [{ title: 'Entries · รายการ', total: mlm(t.pending), cards: pend.map(it => cardOf(it, 'ml', false)), empty: 'No pending entries' }]
+        .concat(rec.length ? [{ title: 'Received · ได้รับแล้ว', cards: rec.map(it => cardOf(it, 'ml', true)) }] : []),
+      footer: 'My Money · made on this device · ' + fullStamp(now) };
+  }
+  function mmReportModel() {
+    const items = state.mm.items, t = L.mmTotals(items), now = Date.now();
+    const owed = L.sortItems(items.filter(i => i.status !== 'received'));
+    const rec = items.filter(i => i.status === 'received').sort((a, b) => (b.receivedAt || 0) - (a.receivedAt || 0));
+    return { theme: 'mother', title: 'Money Mother', subtitle: 'เงินที่แม่ต้องคืน', stamp: fullStamp(now), hero: { label: 'Mom owes · แม่ค้าง', value: mlm(t.owed) },
+      stats: [{ label: 'Outstanding · ค้าง', value: mlm(t.owed), sub: t.owedCount + (t.owedCount === 1 ? ' item' : ' items') },
+        { label: 'Repaid · คืนแล้ว', value: mlm(t.repaid), sub: t.repaidCount + (t.repaidCount === 1 ? ' item' : ' items') }],
+      rows: [],
+      sections: [{ title: 'Owed · แม่ค้าง', total: mlm(t.owed), cards: owed.map(it => cardOf(it, 'mm', false)), empty: 'Nothing owed 🎉' }]
+        .concat(rec.length ? [{ title: 'Repaid · คืนแล้ว', total: mlm(t.repaid), cards: rec.map(it => cardOf(it, 'mm', true)) }] : []),
+      footer: 'My Money · made on this device · ' + fullStamp(now) };
+  }
+  async function exportReport(kind) {
+    toast('Creating report… · กำลังสร้าง');
+    let r;
+    try { r = await Report.render(kind === 'mother' ? mmReportModel() : mlReportModel()); }
+    catch (e) { console.error(e); await dialog({ title: 'Couldn’t create the report', msg: String(e && e.message || e) }); return; }
+    const name = `${kind === 'mother' ? 'money-mother' : 'main-money'}-report-${L.dayKey(Date.now())}.png`;
+    lastExport = { kind, name, width: r.width, height: r.height, blob: r.blob };
+    const file = new File([r.blob], name, { type: 'image/png' });
+    const url = URL.createObjectURL(r.blob);
+    const box = document.createElement('div'); box.className = 'exportprev'; box.innerHTML = `<img id="export-img" alt="Report preview" src="${url}">`;
+    const canShareFile = !!(navigator.canShare && navigator.share && navigator.canShare({ files: [file] }));
+    const download = () => { const el = document.createElement('a'); el.href = url; el.download = name; document.body.appendChild(el); el.click(); el.remove(); };
+    const a = await dialog({ title: (kind === 'mother' ? 'Money Mother' : 'Main Money') + ' report', msg: 'Made on this device. Nothing is uploaded.', extra: box, stack: true,
+      buttons: (canShareFile ? [{ label: 'Share / Save Image…', value: 'share', bold: true }] : []).concat([{ label: 'Download PNG', value: 'dl', bold: !canShareFile }, { label: 'Print / PDF', value: 'print' }, { label: 'Close', value: null }]) });
+    if (a === 'share') { try { await navigator.share({ files: [file], title: name }); } catch (e) { if (e && e.name !== 'AbortError') download(); } }
+    else if (a === 'dl') download();
+    else if (a === 'print') { const p = $('#printimg'); p.src = url; await new Promise(res => { if (p.complete) res(); else p.onload = res; }); window.print(); }
+    setTimeout(() => { if ($('#printimg').getAttribute('src') !== url) URL.revokeObjectURL(url); }, 60000);
+  }
+  function mmCurrentText() { return L.mmText(state.mm.items, Date.now()); }
   function renderMoneyLeft() {
     const ml = state.ml;
     const t = L.mlTotals(ml.accounts, ml.items);
@@ -524,7 +613,7 @@
       buttons: [{ label: 'Cancel', value: false }, { label: 'Update', value: true, bold: true }] });
     if (!ok) return false;
     const x = state.ml.accounts.find(a => a.id === acct.id); if (!x) return false;
-    x.balance = r.balance; x.updated = Date.now(); await saveAccounts(); haptic(); toast(`${x.name} updated · ${mlm(r.balance)}`); renderMoneyLeft();
+    x.balance = r.balance; x.updated = Date.now(); await saveAccounts(); haptic(); toast(`${x.name} updated · ${mlm(r.balance)}`); render();
     return true;
   }
   async function readClipboard() { try { return await navigator.clipboard.readText(); } catch (_) { return null; } }
@@ -589,14 +678,14 @@
       const order = state.ml.accounts.reduce((m, a) => Math.max(m, a.order || 0), -1) + 1;
       state.ml.accounts.push({ id: 'acct-' + L.uid(), name, type: acform.type, balance: v, updated: now, order, created: now });
     }
-    await saveAccounts(); closeAcctSheet(); haptic(); toast(ed ? 'Account saved' : 'Account added · เพิ่มบัญชีแล้ว'); renderMoneyLeft();
+    await saveAccounts(); closeAcctSheet(); haptic(); toast(ed ? 'Account saved' : 'Account added · เพิ่มบัญชีแล้ว'); render();
   }
   async function deleteAcctById(id) {
     const x = state.ml.accounts.find(a => a.id === id); if (!x) return;
     if (state.ml.accounts.length <= 1) { closeOpenRow(); await dialog({ title: 'Keep one account', msg: 'You need at least one account. Set its balance to 0 instead.' }); return; }
     if (!(await confirmDlg('Delete this account? · ลบบัญชี', `${x.name} · ${mlm(x.balance)}\nIts balance is removed from รวม. This can't be undone.`, 'Delete', true))) { closeOpenRow(); return; }
     state.ml.accounts = state.ml.accounts.filter(a => a.id !== id); await saveAccounts();
-    openRow = null; if (acform) closeAcctSheet(); haptic(); toast('Account deleted'); renderMoneyLeft();
+    openRow = null; if (acform) closeAcctSheet(); haptic(); toast('Account deleted'); render();
   }
   async function markReceived(it) {
     const a = await dialog({ title: 'Mark as received? · ได้รับแล้ว', msg: `${it.name} · ${mlm(it.amount)}\n\nAdd it to ${primaryAccount().name} so the total stays the same?`,
@@ -606,7 +695,7 @@
     const upd = Object.assign({}, it, { status: 'received', receivedAt: now, addedToBank: a === 'bank', updated: now });
     if (a === 'bank') await mlAdjustPrimary(it.amount, now);
     await mlPutItem(upd); haptic();
-    toast(a === 'bank' ? 'Received · added to bank' : 'Marked received'); renderMoneyLeft();
+    toast(a === 'bank' ? 'Received · added to bank' : 'Marked received'); render();
   }
   async function markPending(it) {
     const btns = [];
@@ -617,7 +706,7 @@
     const now = Date.now();
     if (a === 'bank') await mlAdjustPrimary(-it.amount, now);
     await mlPutItem(Object.assign({}, it, { status: 'pending', receivedAt: null, addedToBank: false, updated: now }));
-    toast('Moved to pending'); renderMoneyLeft();
+    toast('Moved to pending'); render();
   }
   function mlCurrentText(ts) { return L.mlText(state.ml.accounts, state.ml.items, ts == null ? Date.now() : ts); }
   async function copyText(text) {
@@ -641,26 +730,32 @@
     const now = Date.now(); const t = L.mlTotals(state.ml.accounts, state.ml.items);
     const snap = { id: 's-' + L.uid(), ts: now, bank: t.bank, pending: t.pending, total: t.total, accounts: state.ml.accounts.map(x => ({ name: x.name, type: x.type, balance: x.balance })),
       text: mlCurrentText(now) };
-    await DB.putSnap(snap); state.ml.snaps.push(snap); haptic(); toast('Snapshot saved · ' + mlm(t.total)); renderMoneyLeft();
+    await DB.putSnap(snap); state.ml.snaps.push(snap); haptic(); toast('Snapshot saved · ' + mlm(t.total)); render();
   }
   async function openSnapshot(id) {
     const s = state.ml.snaps.find(x => x.id === id); if (!s) return;
     const a = await showTextDialog('Snapshot · ' + fmtStamp(s.ts), s.text || '', [{ label: 'Delete snapshot', value: 'del', danger: true }]);
     if (a === 'del' && (await confirmDlg('Delete this snapshot?', fmtStamp(s.ts) + ' · ' + mlm(s.total), 'Delete', true))) {
-      await DB.deleteSnap(id); state.ml.snaps = state.ml.snaps.filter(x => x.id !== id); renderMoneyLeft();
+      await DB.deleteSnap(id); state.ml.snaps = state.ml.snaps.filter(x => x.id !== id); render();
     }
   }
   // item sheet
-  function openMLSheet(item) {
-    mlform = { editing: item || null, status: item ? item.status || 'pending' : 'pending', photo: item ? item.photo || null : null, thumb: item ? item.thumb || null : null };
-    $('#ml-sheet-title').textContent = item ? 'Edit Item' : 'New Item';
+  function openMLSheet(item, book) {
+    book = book || (item ? bookOf(item.id) : 'ml'); const mm = book === 'mm';
+    $('#ml-seg [data-status="pending"]').textContent = mm ? 'Owed · แม่ค้าง' : 'Pending · รอรับ';
+    $('#ml-seg [data-status="received"]').textContent = mm ? 'Repaid · คืนแล้ว' : 'Received · ได้รับแล้ว';
+    $('#ml-name').placeholder = mm ? 'What did you pay for Mom? · จ่ายอะไรให้แม่' : 'Name · ชื่อรายการ (e.g. Savings Acc, AIA)';
+    $('#mlsheet').classList.toggle('mmsheet', mm);
+    mlform = { book, editing: item || null, status: item ? item.status || 'pending' : 'pending', photo: item ? item.photo || null : null, thumb: item ? item.thumb || null : null };
+    $('#ml-sheet-title').textContent = mm ? (item ? 'Edit Mom Item' : 'New Mom Item') : (item ? 'Edit Item' : 'New Item');
     $('#ml-amount').value = item ? (item.amount / 100).toFixed(2).replace(/\.00$/, '') : '';
     $('#ml-name').value = item ? item.name : '';
     $('#ml-tag').value = item ? item.tag || '' : '';
     $('#ml-note').value = item ? item.note || '' : '';
     $('#ml-date').value = item ? item.date || '' : '';
     $('#ml-err').hidden = true; $('#ml-delete').hidden = !item; $('#ml-delete-top').hidden = !item;
-    $('#ml-meta').textContent = item ? 'Added ' + fmtStamp(item.created || Date.now()) + (item.receivedAt ? ' · Received ' + fmtStamp(item.receivedAt) : '') : '';
+    $('#ml-meta').textContent = item ? 'Added ' + fmtStamp(item.created || Date.now()) + (item.receivedAt ? (mm ? ' · Repaid ' : ' · Received ') + fmtStamp(item.receivedAt) : '') : '';
+    if (mm && !item) $('#ml-date').value = L.dayKey ? L.dayKey(Date.now()) : '';
     $('.ml-sym').textContent = state.settings.symbol;
     mlSetStatus(mlform.status); mlRenderTagChips(); mlRenderPhoto();
     showSheetEl($('#mlsheet'));
@@ -678,7 +773,7 @@
     $('#mlsheet').classList.toggle('mlrec', s === 'received');
   }
   function mlRenderTagChips() {
-    const tags = new Set(['etax']); state.ml.items.forEach(i => i.tag && tags.add(i.tag));
+    const tags = new Set(mlform && mlform.book === 'mm' ? [] : ['etax']); bookItems(mlform ? mlform.book : 'ml').forEach(i => i.tag && tags.add(i.tag));
     const cur = $('#ml-tag').value.trim();
     $('#ml-tagchips').innerHTML = [...tags].map(t => `<button type="button" class="chip ${t === cur ? 'on' : ''}" data-tag="${esc(t)}">${esc(t)}</button>`).join('');
   }
@@ -695,8 +790,8 @@
     if (!isFinite(amount) || amount <= 0) { show('Enter an amount greater than 0'); $('#ml-amount').focus(); return; }
     const name = $('#ml-name').value.trim();
     if (!name) { show('Enter a name · ใส่ชื่อรายการ'); $('#ml-name').focus(); return; }
-    const now = Date.now(); const prev = mlform.editing;
-    const base = prev || { id: 'i-' + L.uid(), created: now, order: state.ml.items.length ? Math.max(...state.ml.items.map(i => i.order || 0)) + 1 : 0 };
+    const now = Date.now(); const prev = mlform.editing; const book = mlform.book || 'ml', list = bookItems(book);
+    const base = prev || { id: (book === 'mm' ? 'm-' : 'i-') + L.uid(), created: now, order: list.length ? Math.max(...list.map(i => i.order || 0)) + 1 : 0 };
     const it = Object.assign({}, base, { name, amount, groupId: null, date: $('#ml-date').value || '', tag: $('#ml-tag').value.trim(), note: $('#ml-note').value.trim(), status: mlform.status,
       photo: mlform.photo || null, thumb: mlform.thumb || null, updated: now });
     const wasRec = prev && prev.status === 'received';
@@ -705,7 +800,8 @@
     const btn = $('#ml-save'); btn.disabled = true;
     try {
       // keep the bank consistent when status changes inside the sheet
-      if (it.status === 'received' && !wasRec) {
+      if (book === 'mm') { /* Money Mother never touches bank accounts */ }
+      else if (it.status === 'received' && !wasRec) {
         const add = await confirmDlg('Add to bank balance?', `${name} · ${mlm(amount)} received.\nAdd it to ${primaryAccount().name} so the total stays the same?`, 'Add to bank');
         if (add) { await mlAdjustPrimary(amount, now); it.addedToBank = true; }
       } else if (wasRec && it.status !== 'received' && prev.addedToBank) {
@@ -713,16 +809,16 @@
         if (sub) await mlAdjustPrimary(-prev.amount, now);
         it.addedToBank = false;
       }
-      await mlPutItem(it);
-      closeMLSheet(); haptic(); toast(prev ? 'Saved' : 'Item added'); requestPersist(); renderMoneyLeft();
+      await putBookItem(book, it);
+      closeMLSheet(); haptic(); toast(prev ? 'Saved' : 'Item added'); requestPersist(); render();
     } catch (e) { console.error(e); show('Could not save: ' + (e && e.message || e)); }
     finally { btn.disabled = false; }
   }
   async function deleteMLItem() {
     if (!mlform || !mlform.editing) return; const it = mlform.editing;
     if (!(await confirmDlg('Delete this item?', `${it.name} · ${mlm(it.amount)}\nThis can't be undone.`, 'Delete', true))) return;
-    await DB.deleteML(it.id); state.ml.items = state.ml.items.filter(x => x.id !== it.id); dropThumb(it.id);
-    closeMLSheet(); toast('Deleted'); renderMoneyLeft();
+    await deleteBookItem(mlform.book || 'ml', it.id);
+    closeMLSheet(); toast('Deleted'); render();
   }
 
   // ---------- long-press photo peek ----------
@@ -748,13 +844,14 @@
   function setSlide(row, x, animate) { const s = $('.mlslide', row); if (!s) return; s.style.transition = animate ? '' : 'none'; s.style.transform = x ? `translateX(${x}px)` : ''; row.style.setProperty('--sw', Math.max(0, -x) + 'px'); row.classList.toggle('open', x < 0); }
   function closeOpenRow() { if (openRow) { setSlide(openRow, 0, true); openRow = null; } }
   async function deleteMLById(id) {
-    const it = state.ml.items.find(x => x.id === id); if (!it) return;
+    const it = findItem(id); if (!it) return;
     if (!(await confirmDlg('Delete this item? · ลบรายการ', `${it.name} · ${mlm(it.amount)}\nThis can't be undone.`, 'Delete', true))) { closeOpenRow(); return; }
-    await DB.deleteML(it.id); state.ml.items = state.ml.items.filter(x => x.id !== it.id); dropThumb(it.id);
-    openRow = null; haptic(); toast('Deleted · ลบแล้ว'); renderMoneyLeft();
+    await deleteBookItem(bookOf(id), it.id);
+    openRow = null; haptic(); toast('Deleted · ลบแล้ว'); render();
   }
   function bindPeek() {
-    const root = $('#view-moneyleft');
+    const roots = [$('#view-moneyleft'), $('#view-mother')];
+    const root = { contains: el => roots.some(r => r.contains(el)) };
     let timer = null, g = null, suppressClick = false, peeking = false;
     const cancel = () => { clearTimeout(timer); timer = null; };
     const suppress = () => { suppressClick = true; setTimeout(() => { suppressClick = false; }, 400); };
@@ -769,7 +866,7 @@
       g = { row, x0: ev.clientX, y0: ev.clientY, base, x: base, mode: null };
       cancel();
       if (row.dataset.peek && !ev.target.closest('.mlcheck') && !base) {
-        timer = setTimeout(() => { timer = null; if (!g || g.mode) return; g.mode = 'peek'; peeking = true; suppress(); openPeek(state.ml.items.find(i => i.id === row.dataset.peek)); }, 400);
+        timer = setTimeout(() => { timer = null; if (!g || g.mode) return; g.mode = 'peek'; peeking = true; suppress(); openPeek(findItem(row.dataset.peek)); }, 400);
       }
     });
     window.addEventListener('pointermove', ev => {
@@ -800,7 +897,7 @@
       if (da) { ev.stopPropagation(); ev.preventDefault(); deleteAcctById(da.dataset.delacct); return; }
       if (suppressClick && root.contains(ev.target)) { suppressClick = false; ev.stopPropagation(); ev.preventDefault(); }
     }, true);
-    root.addEventListener('contextmenu', ev => { if (ev.target.closest('.mlitem')) ev.preventDefault(); });
+    roots.forEach(r => r.addEventListener('contextmenu', ev => { if (ev.target.closest('.mlitem')) ev.preventDefault(); }));
     $('#peek').addEventListener('click', closePeek);
   }
   function bindMoneyLeft() {
@@ -825,10 +922,21 @@
       if ((b = t.closest('[data-acct]'))) { const x = state.ml.accounts.find(a => a.id === b.dataset.acct); if (x) openAcctSheet(x); return; }
       if ((b = t.closest('[data-recv]'))) { const it = state.ml.items.find(i => i.id === b.dataset.recv); if (it) markReceived(it); return; }
       if ((b = t.closest('[data-unrecv]'))) { const it = state.ml.items.find(i => i.id === b.dataset.unrecv); if (it) markPending(it); return; }
-      if ((b = t.closest('[data-mlitem]'))) { const it = state.ml.items.find(i => i.id === b.dataset.mlitem); if (it) openMLSheet(it); return; }
-      if ((b = t.closest('[data-additem]'))) { openMLSheet(null); return; }
+      if ((b = t.closest('[data-mlitem]'))) { const it = state.ml.items.find(i => i.id === b.dataset.mlitem); if (it) openMLSheet(it, 'ml'); return; }
+      if ((b = t.closest('[data-additem]'))) { openMLSheet(null, 'ml'); return; }
       if ((b = t.closest('[data-snap]'))) { openSnapshot(b.dataset.snap); return; }
     });
+    $('#view-mother').addEventListener('click', ev => {
+      const t = ev.target; let b;
+      if ((b = t.closest('[data-recv]'))) { const it = state.mm.items.find(i => i.id === b.dataset.recv); if (it) markRepaid(it); return; }
+      if ((b = t.closest('[data-unrecv]'))) { const it = state.mm.items.find(i => i.id === b.dataset.unrecv); if (it) markOwed(it); return; }
+      if ((b = t.closest('[data-mlitem]'))) { const it = state.mm.items.find(i => i.id === b.dataset.mlitem); if (it) openMLSheet(it, 'mm'); return; }
+      if ((b = t.closest('[data-additem]'))) { openMLSheet(null, 'mm'); return; }
+    });
+    const mmCopy = () => showTextDialog('Copy as text · คัดลอก', mmCurrentText());
+    $('#mm-copy').addEventListener('click', mmCopy);
+    $('#mm-export').addEventListener('click', () => exportReport('mother'));
+    $('#ml-export').addEventListener('click', () => exportReport('main')); $('#mm-copy-top').addEventListener('click', mmCopy);
     $('#ml-cancel').addEventListener('click', closeMLSheet);
     $('#ml-save').addEventListener('click', saveMLForm);
     $('#mlform').addEventListener('submit', ev => { ev.preventDefault(); saveMLForm(); });
@@ -919,9 +1027,17 @@
       o.thumb = it.thumb ? await blobToDataURL(it.thumb) : null;
       items.push(o);
     }
-    return { app: 'my-expenses', format: 4, appVersion: APP_VERSION, exportedAt: new Date().toISOString(),
+    const mmItems = [];
+    for (const it of L.sortItems(state.mm.items)) {
+      const o = Object.assign({}, it);
+      o.photo = it.photo ? await blobToDataURL(it.photo) : null;
+      o.thumb = it.thumb ? await blobToDataURL(it.thumb) : null;
+      mmItems.push(o);
+    }
+    return { app: 'my-expenses', format: 5, appVersion: APP_VERSION, exportedAt: new Date().toISOString(),
       settings: { start: state.settings.start, symbol: state.settings.symbol, customCats: state.settings.customCats }, entries,
-      moneyLeft: { accounts: state.ml.accounts.map(x => Object.assign({}, x)), bank: state.ml.bank, bankUpdated: state.ml.bankUpdated, groups: [], items, snapshots: state.ml.snaps.slice().sort((a, b) => a.ts - b.ts) } };
+      moneyLeft: { accounts: state.ml.accounts.map(x => Object.assign({}, x)), bank: state.ml.bank, bankUpdated: state.ml.bankUpdated, groups: [], items, snapshots: state.ml.snaps.slice().sort((a, b) => a.ts - b.ts) },
+      moneyMother: { items: mmItems } };
   }
   async function exportBackup(mode) {
     if (!mode) mode = await dialog({ title: 'Export backup · สำรองข้อมูล', msg: 'An encrypted backup is protected by a passcode you choose (you need it to restore).',
@@ -950,11 +1066,9 @@
       catch (e) { if (e && e.name !== 'AbortError') { download(); } }
     } else if (choice === 'dl') { download(); await DB.setKV('lastBackup', Date.now()); }
   }
-  function parseMoneyLeft(m) {
-    if (!m || typeof m !== 'object') return null;
-    const groups = (Array.isArray(m.groups) ? m.groups : []).filter(g => g && g.id && g.name).map((g, i) => ({ id: String(g.id), name: String(g.name).slice(0, 60), order: Number.isFinite(+g.order) ? +g.order : i }));
+  function parseItemList(arr) {
     const items = []; let bad = 0;
-    for (const r of Array.isArray(m.items) ? m.items : []) {
+    for (const r of Array.isArray(arr) ? arr : []) {
       const it = { id: String(r.id || ''), groupId: r.groupId == null ? null : String(r.groupId), name: String(r.name || '').trim(), amount: Number(r.amount), date: /^\d{4}-\d\d-\d\d$/.test(r.date || '') ? r.date : '', tag: String(r.tag || ''), note: String(r.note || ''),
         status: r.status === 'received' ? 'received' : 'pending', receivedAt: Number(r.receivedAt) || null, addedToBank: !!r.addedToBank,
         order: Number(r.order) || 0, created: Number(r.created) || Date.now(), updated: Number(r.updated) || Number(r.created) || Date.now(), photo: null, thumb: null };
@@ -962,6 +1076,17 @@
       try { if (r.photo) it.photo = dataURLToBlob(r.photo); if (r.thumb) it.thumb = dataURLToBlob(r.thumb); } catch (_) {}
       items.push(it);
     }
+    return { items, bad };
+  }
+  function parseMother(m) { // v1.6.0; absent in older backups -> null (nothing changes)
+    if (!m || typeof m !== 'object' || !Array.isArray(m.items)) return null;
+    const { items, bad } = parseItemList(m.items);
+    return { items: L.sortItems(items).map(it => Object.assign(it, { groupId: null, addedToBank: false })), bad };
+  }
+  function parseMoneyLeft(m) {
+    if (!m || typeof m !== 'object') return null;
+    const groups = (Array.isArray(m.groups) ? m.groups : []).filter(g => g && g.id && g.name).map((g, i) => ({ id: String(g.id), name: String(g.name).slice(0, 60), order: Number.isFinite(+g.order) ? +g.order : i }));
+    const { items, bad } = parseItemList(m.items);
     const snaps = (Array.isArray(m.snapshots) ? m.snapshots : []).filter(x => x && x.id && Number.isFinite(+x.ts)).map(x => ({ id: String(x.id), ts: +x.ts, bank: Number(x.bank) || 0, pending: Number(x.pending) || 0, total: Number(x.total) || 0,
       text: String(x.text || ''), accounts: Array.isArray(x.accounts) ? x.accounts : undefined }));
     let accounts = L.normAccounts(m.accounts); // v1.4.0 format; older files have a single bank balance
@@ -982,8 +1107,9 @@
     }
     const s = data.settings || {};
     const ml = parseMoneyLeft(data.moneyLeft);
+    const mm = parseMother(data.moneyMother);
     const partial = Array.isArray(data.partial) ? data.partial : null;
-    return { entries, bad, ml, mlOnly: !!(partial && partial.length === 1 && partial[0] === 'moneyLeft'),
+    return { entries, bad, ml, mm, mlOnly: !!(partial && partial.length === 1 && partial[0] === 'moneyLeft'),
       settings: { start: Number.isInteger(s.start) ? s.start : 0, symbol: typeof s.symbol === 'string' && s.symbol ? s.symbol.slice(0, 4) : '฿', customCats: Array.isArray(s.customCats) ? s.customCats.filter(c => c && c.id && c.name) : [] }, exportedAt: data.exportedAt };
   }
   async function applyMoneyLeft(ml, replace) {
@@ -1008,6 +1134,18 @@
       ml.items = ml.items.map((it, k) => (have.has(it.id) ? it : Object.assign({}, it, { order: base + k })));
     }
     await DB.putMLs(ml.items); await DB.putSnaps(ml.snaps);
+  }
+  async function applyMother(mm, replace) {
+    if (replace) await DB.clearMM(); // "Replace everything" also replaces Money Mother (older backups have none)
+    if (!mm || !mm.items.length) return;
+    for (const it of mm.items) if (it.photo && !it.thumb) { try { it.thumb = (await processPhoto(it.photo, 1600, 192)).thumb; } catch (_) {} }
+    let list = mm.items;
+    if (!replace) {
+      const cur = state.mm.items, have = new Set(cur.map(i => i.id));
+      const base = cur.length ? Math.max(...cur.map(i => i.order || 0)) + 1 : 0;
+      list = list.map((it, k) => (have.has(it.id) ? it : Object.assign({}, it, { order: base + k })));
+    }
+    await DB.putMMs(list);
   }
   async function importBackup(file) {
     let parsed;
@@ -1039,7 +1177,7 @@
       await loadAll(); resetThumbs(); toast('Main Money restored'); requestPersist(); render(); return;
     }
 
-    const mode = await dialog({ title: 'Restore backup?', msg: `Backup from ${when}.${mlDesc ? '\n' + mlDesc : ''}${parsed.entries.length ? `\nAlso ${parsed.entries.length} older expense entries (kept, not shown).` : ''}${parsed.bad ? `\n${parsed.bad} invalid entries will be skipped.` : ''}\n\nMerge keeps your current data. Replace erases it first.`,
+    const mode = await dialog({ title: 'Restore backup?', msg: `Backup from ${when}.${mlDesc ? '\n' + mlDesc : ''}${parsed.mm ? `\nMoney Mother: ${parsed.mm.items.length} items.` : ''}${parsed.entries.length ? `\nAlso ${parsed.entries.length} older expense entries (kept, not shown).` : ''}${parsed.bad ? `\n${parsed.bad} invalid entries will be skipped.` : ''}\n\nMerge keeps your current data. Replace erases it first.`,
       buttons: [{ label: 'Merge', value: 'merge', bold: true }, { label: 'Replace everything', value: 'replace', danger: true }, { label: 'Cancel', value: null }] });
     if (!mode) return;
     if (mode === 'replace') {
@@ -1055,6 +1193,7 @@
     await DB.putEntries(parsed.entries);
     await Promise.all([DB.setKV('start', state.settings.start), DB.setKV('symbol', state.settings.symbol), DB.setKV('customCats', state.settings.customCats)]);
     await applyMoneyLeft(parsed.ml, mode === 'replace');
+    await applyMother(parsed.mm, mode === 'replace');
     await loadAll(); resetThumbs();
     toast('Backup restored');
     requestPersist();
@@ -1118,9 +1257,9 @@
     if (form) closeSheet(); if (mlform) closeMLSheet(); if (acform) closeAcctSheet(); closePeek(); if (!$('#viewer').hidden) closeViewer();
     $('#dlg').hidden = true;
     currentDEK = null; DB.setKey(null);
-    state.entries = []; state.ml = { bank: 0, bankUpdated: null, accounts: [], groups: [], items: [], snaps: [] };
+    state.entries = []; state.ml = { bank: 0, bankUpdated: null, accounts: [], groups: [], items: [], snaps: [] }; state.mm = { items: [] };
     thumbURLs.forEach(v => revokeLater(v.url)); thumbURLs.clear();
-    $('#ml-groups').innerHTML = ''; $('#ml-received').innerHTML = ''; $('#ml-snaps').innerHTML = ''; $('#ml-accts').innerHTML = ''; $('#list').innerHTML = '';
+    $('#ml-groups').innerHTML = ''; $('#ml-received').innerHTML = ''; $('#ml-snaps').innerHTML = ''; $('#ml-accts').innerHTML = ''; $('#mm-list').innerHTML = ''; $('#mm-received').innerHTML = ''; $('#list').innerHTML = '';
     showLock(true);
   }
   async function encryptSetup() {
@@ -1227,7 +1366,7 @@
   // ---------- events ----------
   function bind() {
     $('#tabbar').addEventListener('click', ev => { const t = ev.target.closest('.tab'); if (t) setView(t.dataset.view); });
-    $('#fab').addEventListener('click', () => openMLSheet(null));
+    $('#fab').addEventListener('click', () => openMLSheet(null, state.view === 'mother' ? 'mm' : 'ml'));
     $('#btn-search-toggle').addEventListener('click', () => {
       const w = $('#searchwrap'); w.hidden = !w.hidden;
       if (!w.hidden) $('#search').focus(); else if (state.filter.query) { state.filter.query = ''; $('#search').value = ''; renderHome(); }
@@ -1332,6 +1471,6 @@
   }
 
   // exposed for automated tests only
-  window.__app = { state, processPhoto, parseBackup, buildBackup, importBackup, render, mlCurrentText, lockNow, DB: () => DB };
+  window.__app = { get lastExport() { return lastExport; }, exportReport, state, processPhoto, parseBackup, buildBackup, importBackup, render, mlCurrentText, lockNow, DB: () => DB };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 })();

@@ -391,3 +391,20 @@ body.locked #app, body.locked .tabbar, body.locked .fab { visibility: hidden; }
 .smshelp .dlg-sub { margin-top: 8px; }
 .smshelp select.dlg-input { width: 100%; }
 .smshelp .dlg-pre { font-size: 12px; word-break: break-all; user-select: text; -webkit-user-select: text; }
+
+/* v1.6.0 Money Mother + export */
+.mmcard { background: linear-gradient(135deg, #C2185B 0%, #E0567A 55%, #F08A5D 100%); box-shadow: 0 10px 30px rgba(224,86,122,.30); }
+@media (prefers-color-scheme: dark) { .mmcard { background: linear-gradient(135deg, #8E1446 0%, #A83C5C 55%, #B0603F 100%); box-shadow: none; } }
+.mlactions.three { grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.mlactions.three .actbtn { flex-direction: column; align-items: flex-start; gap: 4px; padding: 10px; font-size: 14px; }
+.mlactions.three .actbtn svg { width: 20px; height: 20px; }
+.mlactions.three .actbtn small { font-size: 11px; }
+.exportprev { max-height: 52vh; overflow: auto; border-radius: 12px; background: var(--fill); margin-top: 8px; }
+.exportprev img { display: block; width: 100%; height: auto; }
+#printarea { display: none; }
+@media print {
+  body > *:not(#printarea) { display: none !important; }
+  #printarea { display: block !important; }
+  #printimg { width: 100%; height: auto; }
+  @page { margin: 8mm; }
+}

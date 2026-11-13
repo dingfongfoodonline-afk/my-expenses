@@ -89,8 +89,9 @@
       <div class="cardbtns"><button class="addacct" id="ml-add-acct">＋ Add account · เพิ่มบัญชี</button><button class="addacct" id="ml-paste-sms">📋 Paste KBank SMS</button></div>
     </div>
 
-    <div class="mlactions">
+    <div class="mlactions three">
       <button class="actbtn" id="ml-snap"><svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg><span>Save snapshot<small>บันทึกยอด</small></span></button>
+      <button class="actbtn" id="ml-export"><svg viewBox="0 0 24 24"><path d="M12 3v12M8 7l4-4 4 4"/><path d="M5 13v7h14v-7"/></svg><span>Export report<small>ส่งออกรายงาน</small></span></button>
       <button class="actbtn" id="ml-copy"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg><span>Copy as text<small>คัดลอกข้อความ</small></span></button>
     </div>
 
@@ -106,6 +107,36 @@
 
     <div class="group-h" id="ml-snap-h" hidden>Snapshots · ประวัติยอด</div>
     <div class="items" id="ml-snaps" hidden></div>
+  </section>
+
+  <!-- MONEY MOTHER (v1.6.0) -->
+  <section class="view" id="view-mother" aria-label="Money Mother">
+    <header class="largetitle">
+      <div class="titlerow">
+        <div><h1>Money Mother</h1><div class="subtitle">เงินที่แม่ต้องคืน</div></div>
+        <button class="iconbtn" id="mm-copy-top" aria-label="Copy as text"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg></button>
+      </div>
+    </header>
+    <div class="mlcard mmcard">
+      <div class="bc-label">Mom owes · แม่ค้าง</div>
+      <div class="bc-amount" id="mm-owed">฿0</div>
+      <div class="bc-row">
+        <div class="bc-col"><div class="mlcol"><div class="bc-sub">⏳ Outstanding · ค้าง</div><div class="bc-val" id="mm-owed-2">฿0</div><div class="bc-tiny" id="mm-owed-n">0 items</div></div></div>
+        <div class="bc-col"><div class="mlcol"><div class="bc-sub">✅ Repaid · คืนแล้ว</div><div class="bc-val" id="mm-repaid">฿0</div><div class="bc-tiny" id="mm-repaid-n">0 items</div></div></div>
+      </div>
+    </div>
+    <div class="mlactions">
+      <button class="actbtn" id="mm-export"><svg viewBox="0 0 24 24"><path d="M12 3v12M8 7l4-4 4 4"/><path d="M5 13v7h14v-7"/></svg><span>Export report<small>ส่งออกรายงาน</small></span></button>
+      <button class="actbtn" id="mm-copy"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg><span>Copy as text<small>คัดลอกข้อความ</small></span></button>
+    </div>
+    <div id="mm-list"></div>
+    <div class="empty" id="mm-empty" hidden>
+      <div class="empty-art">👩‍👦</div>
+      <h2>Money you paid for Mom</h2>
+      <p>Log what you spent for your mother. Tick an item when she pays you back. These totals are separate from Main Money.</p>
+    </div>
+    <div class="group-h" id="mm-rec-h" hidden>Repaid · คืนแล้ว</div>
+    <div class="items" id="mm-received" hidden></div>
   </section>
 
   <!-- SUMMARY -->
@@ -202,6 +233,7 @@
 <!-- Tab bar -->
 <nav class="tabbar" id="tabbar">
   <button class="tab active" data-view="moneyleft"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="13" rx="2.5"/><path d="M3 10h18"/><circle cx="16.5" cy="14.5" r="1.3"/></svg><span>Main Money</span></button>
+  <button class="tab" data-view="mother"><svg viewBox="0 0 24 24"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"/></svg><span>Money Mother</span></button>
   <button class="tab" data-view="settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span>Settings</span></button>
 </nav>
 <button class="fab" id="fab" aria-label="Add entry"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
@@ -390,9 +422,11 @@
 
 <div class="toast" id="toast" hidden></div>
 
+<div id="printarea" aria-hidden="true"><img id="printimg" alt=""></div>
 <script src="logic.js"></script>
 <script src="vault.js"></script>
 <script src="db.js"></script>
+<script src="export.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

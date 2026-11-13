@@ -235,7 +235,21 @@
     const r = parseKBankSMS(text); if (r) return r;
     const v = parseBaht(text); return v == null ? null : { balance: v, time: null, spent: null };
   }
-  const api = { parseBaht, parseKBankSMS, parseBalanceText, MAIN_ACCOUNT_ID, sortAccounts, acctTotal, legacyAccount, normAccounts, sortGroups, sortItems, flattenML, mlTotals, fmtPlain, mlText, EXPENSE_CATS, INCOME_CATS, PALETTE, allCategories, findCategory, toCents, fmtMoney, dayKey, monthKey, monthLabel,
+  // ---------- Money Mother (v1.6.0): money spent for Mom, to get back ----------
+  function mmTotals(items) {
+    let owed = 0, repaid = 0, owedCount = 0, repaidCount = 0;
+    for (const it of items || []) { if (it.status === 'received') { repaid += it.amount; repaidCount++; } else { owed += it.amount; owedCount++; } }
+    return { owed, repaid, owedCount, repaidCount };
+  }
+  function mmText(items, ts) {
+    const d = new Date(ts == null ? Date.now() : ts);
+    const lines = [pad(d.getDate()) + '/' + pad(d.getMonth() + 1) + '/' + d.getFullYear(), pad(d.getHours()) + '.' + pad(d.getMinutes()), '', 'เงินแม่ค้าง (Money Mother)', ''];
+    for (const i of sortItems((items || []).filter(i => i.status !== 'received')))
+      lines.push(i.name + ' ' + fmtPlain(i.amount) + (i.date ? ' (' + i.date.split('-').reverse().join('/') + ')' : '') + (i.note ? ' – ' + i.note.replace(/\s+/g, ' ') : ''));
+    lines.push('', 'รวมแม่ค้าง ' + fmtPlain(mmTotals(items).owed));
+    return lines.join('\n');
+  }
+  const api = { mmTotals, mmText, parseBaht, parseKBankSMS, parseBalanceText, MAIN_ACCOUNT_ID, sortAccounts, acctTotal, legacyAccount, normAccounts, sortGroups, sortItems, flattenML, mlTotals, fmtPlain, mlText, EXPENSE_CATS, INCOME_CATS, PALETTE, allCategories, findCategory, toCents, fmtMoney, dayKey, monthKey, monthLabel,
     addMonths, daysInMonth, dayLabel, toLocalInputs, fromLocalInputs, totals, filterEntries, sortNewest, groupByDay,
     monthSummary, monthsWithData, validateEntry, uid, slug };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Logic = api;

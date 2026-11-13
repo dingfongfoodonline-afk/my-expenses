@@ -31,3 +31,14 @@ Files: index.html, style.css, logic.js (pure logic), db.js (IndexedDB), app.js (
 - Links like `?setbal=1234.56&acct=<name>&src=kbank-sms` or `?sms=<SMS text>` show a confirm after unlock, then clear the query string.
 - Find the helper URL under Settings → SMS auto-update.
 - See SHORTCUT.md for the iOS Shortcuts setup and caveats. Home-screen apps don't share storage with Safari.
+
+## Money Mother (v1.6.0)
+- The second tab logs money you spent for your mother and should get back. Each item has a name, amount, date (defaults to today), and an optional note and photo.
+- Tap the circle to mark an item repaid, and tap it again to move it back to owed. Swipe left or use the header Delete to remove an item. Press and hold an item to preview its photo.
+- The card shows **Mom owes** (outstanding) and **Repaid**. These totals are completely separate from Main Money's รวม and the bank accounts.
+- Items live in their own IndexedDB store (`mmitems`, DB v3; the upgrade is additive). They are encrypted with the same data key when encryption is on, and included in backups (format 5). Older backups without Money Mother still import.
+
+## Export report (v1.6.0)
+- **Export report** on both tabs draws a designed PNG on the device with `<canvas>` (`export.js`). It has a summary header, then a card per entry with its photo, amount and date/time.
+- Thai text uses the system fonts. No network, nothing uploaded.
+- On iPhone the share sheet saves or sends the image. Elsewhere it downloads. **Print / PDF** prints the same image through a print stylesheet.

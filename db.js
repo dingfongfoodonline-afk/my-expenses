@@ -3,8 +3,8 @@
 (function (root) {
   'use strict';
   const DB_NAME = 'my-expenses';
-  const DB_VER = 2;
-  const STORES = { entries: 'id', kv: 'key', mlitems: 'id', mlsnaps: 'id' };
+  const DB_VER = 3; // v3 (app 1.6.0): + mmitems (Money Mother)
+  const STORES = { entries: 'id', kv: 'key', mlitems: 'id', mlsnaps: 'id', mmitems: 'id' };
   const PLAIN_KV = new Set(['crypto', 'hintDismissed', 'lastBackup']); // never secret, readable while locked
   let dbp = null;
   let dek = null;       // data key in memory only while unlocked
@@ -20,6 +20,7 @@
         if (!db.objectStoreNames.contains('kv')) db.createObjectStore('kv', { keyPath: 'key' });
         if (!db.objectStoreNames.contains('mlitems')) db.createObjectStore('mlitems', { keyPath: 'id' });
         if (!db.objectStoreNames.contains('mlsnaps')) db.createObjectStore('mlsnaps', { keyPath: 'id' });
+        if (!db.objectStoreNames.contains('mmitems')) db.createObjectStore('mmitems', { keyPath: 'id' }); // additive: existing stores untouched
       };
       req.onsuccess = () => { const db = req.result; db.onversionchange = () => { db.close(); dbp = null; }; resolve(db); };
       req.onerror = () => reject(req.error);
@@ -106,6 +107,11 @@
     putSnap(x) { return putMany('mlsnaps', [x]); },
     putSnaps(list) { return putMany('mlsnaps', list); },
     deleteSnap(id) { return tx('mlsnaps', 'readwrite', s => { s.delete(id); }); },
+    allMM() { return getAll('mmitems'); },
+    putMM(i) { return putMany('mmitems', [i]); },
+    putMMs(list) { return putMany('mmitems', list); },
+    deleteMM(id) { return tx('mmitems', 'readwrite', s => { s.delete(id); }); },
+    clearMM() { return tx('mmitems', 'readwrite', s => { s.clear(); }); },
     async clearAll() { await Promise.all(Object.keys(STORES).map(n => tx(n, 'readwrite', s => { s.clear(); }))); encOn = false; dek = null; }
   };
   root.DB = DB;
