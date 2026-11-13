@@ -25,3 +25,9 @@ Files: index.html, style.css, logic.js (pure logic), db.js (IndexedDB), app.js (
 - รวม = all accounts + pending entries. "Received + add to bank" goes to the first Bank account.
 - The old single bank balance migrates to an account named เงินในธนาคาร and keeps its timestamp. Accounts are stored encrypted when encryption is on.
 - Backups are format 4 and include accounts. Older backups (single bank, grouped) still import.
+
+## KBank SMS (v1.5.0)
+- **📋 Paste KBank SMS** on the balance card, or in an account's sheet, reads the clipboard. It parses the balance after `เหลือ` and asks before updating.
+- Links like `?setbal=1234.56&acct=<name>&src=kbank-sms` or `?sms=<SMS text>` show a confirm after unlock, then clear the query string.
+- Find the helper URL under Settings → SMS auto-update.
+- See SHORTCUT.md for the iOS Shortcuts setup and caveats. Home-screen apps don't share storage with Safari.

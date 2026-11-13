@@ -211,7 +211,31 @@
     return lines.join('\n');
   }
 
-  const api = { MAIN_ACCOUNT_ID, sortAccounts, acctTotal, legacyAccount, normAccounts, sortGroups, sortItems, flattenML, mlTotals, fmtPlain, mlText, EXPENSE_CATS, INCOME_CATS, PALETTE, allCategories, findCategory, toCents, fmtMoney, dayKey, monthKey, monthLabel,
+  // ---------- KBank SMS (v1.5.0) ----------
+  // "ชำระ 1,234.56 บ บัตร x-3359@ADOBE  *ADOBE   23:08น เหลือ 12,345.67บ" -> { balance: 1234567 (satang), time: '23:08', spent: 123456 }
+  function parseBaht(s) {
+    if (s == null) return null;
+    const t = String(s).trim().replace(/[,\s]/g, '').replace(/(บาท|บ\.?|฿|THB)$/i, '').replace(/^฿/, '');
+    if (!/^\d+(\.\d{1,2})?$/.test(t)) return null;
+    const [i, d = ''] = t.split('.'); const v = Number(i) * 100 + Number((d + '00').slice(0, 2));
+    return Number.isSafeInteger(v) ? v : null;
+  }
+  function parseKBankSMS(text) {
+    if (text == null) return null;
+    const s = String(text).replace(/\u00a0/g, ' ');
+    const m = s.match(/เหลือ\s*:?\s*([\d,]+(?:\.\d{1,2})?)\s*(?:บาท|บ\.?|฿)?/);
+    if (!m) return null;
+    const balance = parseBaht(m[1]); if (balance == null) return null;
+    const tm = s.match(/(\d{1,2})[:.](\d{2})\s*น/);
+    const sp = s.match(/(?:ชำระ|ถอน|โอน|จ่าย)\s*([\d,]+(?:\.\d{1,2})?)\s*(?:บาท|บ)/);
+    return { balance, time: tm ? tm[1].padStart(2, '0') + ':' + tm[2] : null, spent: sp ? parseBaht(sp[1]) : null };
+  }
+  // clipboard may hold a full SMS or just a number
+  function parseBalanceText(text) {
+    const r = parseKBankSMS(text); if (r) return r;
+    const v = parseBaht(text); return v == null ? null : { balance: v, time: null, spent: null };
+  }
+  const api = { parseBaht, parseKBankSMS, parseBalanceText, MAIN_ACCOUNT_ID, sortAccounts, acctTotal, legacyAccount, normAccounts, sortGroups, sortItems, flattenML, mlTotals, fmtPlain, mlText, EXPENSE_CATS, INCOME_CATS, PALETTE, allCategories, findCategory, toCents, fmtMoney, dayKey, monthKey, monthLabel,
     addMonths, daysInMonth, dayLabel, toLocalInputs, fromLocalInputs, totals, filterEntries, sortNewest, groupByDay,
     monthSummary, monthsWithData, validateEntry, uid, slug };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Logic = api;

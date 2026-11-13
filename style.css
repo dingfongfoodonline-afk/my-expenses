@@ -381,3 +381,13 @@ body.locked #app, body.locked .tabbar, body.locked .fab { visibility: hidden; }
 .acct-sub b { font-size: 16px; color: #fff; font-variant-numeric: tabular-nums; }
 .addacct { margin-top: 10px; font-size: 13px; font-weight: 600; color: #fff; background: rgba(255,255,255,.16); border-radius: 999px; padding: 6px 12px; }
 .addacct:active { background: rgba(255,255,255,.28); }
+
+/* v1.5.0 SMS */
+.cardbtns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.cardbtns .addacct { margin-top: 0; }
+.pastebtn { display: block; width: 100%; margin-top: 12px; padding: 12px; border-radius: 12px; background: var(--bg2); color: var(--accent, #007AFF); font-weight: 600; font-size: 15px; }
+.pastebtn:active { opacity: .6; }
+.smshelp { text-align: left; }
+.smshelp .dlg-sub { margin-top: 8px; }
+.smshelp select.dlg-input { width: 100%; }
+.smshelp .dlg-pre { font-size: 12px; word-break: break-all; user-select: text; -webkit-user-select: text; }

@@ -86,7 +86,7 @@
         <div class="bc-col"><div class="mlcol"><div class="bc-sub">⏳ Pending · รอรับ</div><div class="bc-val" id="ml-pending">฿0</div><div class="bc-tiny" id="ml-pending-n">0 items</div></div></div>
       </div>
       <div class="accts" id="ml-accts" hidden></div>
-      <button class="addacct" id="ml-add-acct">＋ Add account · เพิ่มบัญชี</button>
+      <div class="cardbtns"><button class="addacct" id="ml-add-acct">＋ Add account · เพิ่มบัญชี</button><button class="addacct" id="ml-paste-sms">📋 Paste KBank SMS</button></div>
     </div>
 
     <div class="mlactions">
@@ -168,6 +168,12 @@
       <button class="row danger" id="btn-decrypt"><span class="row-l">Turn off encryption</span></button>
     </div>
     <div class="group-f" id="sec-note"></div>
+
+    <div class="group-h">Automation</div>
+    <div class="group">
+      <button class="row link" id="btn-sms"><span class="row-l">📩 SMS auto-update</span><span class="chev">›</span></button>
+    </div>
+    <div class="group-f">Update a balance from a KBank SMS using iOS Shortcuts.</div>
 
     <div class="group-h">Backup</div>
     <div class="group">
@@ -338,6 +344,7 @@
     <div class="group">
       <input class="fullinput" id="ac-name" maxlength="60" placeholder="Name · ชื่อบัญชี (e.g. KBank, เงินสด)">
     </div>
+    <button type="button" class="pastebtn" id="ac-paste">📋 Paste balance from KBank SMS · วางยอดจาก SMS</button>
     <div class="meta" id="ac-meta"></div>
   </form>
 </div>

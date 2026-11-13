@@ -4,7 +4,7 @@
   const L = window.Logic;
   const $ = (s, el) => (el || document).querySelector(s);
   const $$ = (s, el) => Array.from((el || document).querySelectorAll(s));
-  const APP_VERSION = '1.4.0';
+  const APP_VERSION = '1.5.0';
 
   const state = {
     entries: [],
@@ -498,6 +498,65 @@
     inp.addEventListener('input', () => { let v = inp.value.replace(/,/g, '').replace(/[^\d.]/g, ''); const i = v.indexOf('.'); if (i >= 0) v = v.slice(0, i + 1) + v.slice(i + 1).replace(/\./g, '').slice(0, 2); if (v !== inp.value) inp.value = v; });
     return { box, inp };
   }
+  // ---------- KBank SMS balance updates (v1.5.0) ----------
+  // ?setbal=1234.56&acct=<name>&src=kbank-sms  or  ?sms=<full SMS text>. Queued until data is unlocked; never applied without confirm.
+  let pendingSMS = (() => {
+    const q = new URLSearchParams(location.search);
+    if (!q.has('setbal') && !q.has('sms')) return null;
+    return { setbal: q.get('setbal'), sms: q.get('sms'), acct: q.get('acct') || '', src: q.get('src') || '' };
+  })();
+  function clearQuery() { try { history.replaceState(null, '', location.pathname + location.hash); } catch (_) {} }
+  function findAccount(name) { const n = String(name || '').trim().toLowerCase(); return n ? state.ml.accounts.find(x => x.name.trim().toLowerCase() === n) || null : null; }
+  async function processPendingSMS() {
+    const p = pendingSMS; if (!p) return; pendingSMS = null;
+    if (state.view !== 'moneyleft') setView('moneyleft');
+    const r = p.setbal != null ? (v => (v == null ? null : { balance: v, time: null }))(L.parseBaht(p.setbal)) : L.parseKBankSMS(p.sms);
+    if (!r) { clearQuery(); toast('Couldn’t read a balance from the SMS · ไม่พบยอดเงิน'); return; }
+    await confirmBalanceUpdate(r, p.acct, p.src === 'kbank-sms' || p.sms != null ? 'KBank SMS' : 'link');
+    clearQuery();
+  }
+  async function confirmBalanceUpdate(r, acctName, srcLabel) {
+    let acct = findAccount(acctName), note = '';
+    if (!acct) { acct = primaryAccount(); if (acctName && acct) note = `\n“${acctName}” not found, so ${acct.name} is used.`; }
+    if (!acct) return false;
+    const ok = await dialog({ title: `Update ${acct.name} to ${mlm(r.balance)}?`,
+      msg: `(from ${srcLabel}${r.time ? ' ' + r.time : ''})\nNow ${mlm(acct.balance)}${acct.updated ? ' · updated ' + fmtStamp(acct.updated) : ''}${note}`,
+      buttons: [{ label: 'Cancel', value: false }, { label: 'Update', value: true, bold: true }] });
+    if (!ok) return false;
+    const x = state.ml.accounts.find(a => a.id === acct.id); if (!x) return false;
+    x.balance = r.balance; x.updated = Date.now(); await saveAccounts(); haptic(); toast(`${x.name} updated · ${mlm(r.balance)}`); renderMoneyLeft();
+    return true;
+  }
+  async function readClipboard() { try { return await navigator.clipboard.readText(); } catch (_) { return null; } }
+  async function pasteFromSMS() {
+    const t = await readClipboard();
+    if (t == null) { toast('Couldn’t read the clipboard. Tap Paste when iOS asks.'); return; }
+    const r = L.parseBalanceText(t);
+    if (!r) { toast('No balance in clipboard (needs “เหลือ …บ”)'); return; }
+    await confirmBalanceUpdate(r, '', 'KBank SMS');
+  }
+  async function pasteIntoAcctSheet() {
+    const t = await readClipboard(); const r = t == null ? null : L.parseBalanceText(t);
+    if (!r) { toast(t == null ? 'Couldn’t read the clipboard' : 'No balance in clipboard (needs “เหลือ …บ”)'); return; }
+    $('#ac-amount').value = (r.balance / 100).toFixed(2).replace(/\.00$/, ''); toast('Pasted ' + mlm(r.balance) + (r.time ? ' · SMS ' + r.time : '') + '. Tap Save.');
+  }
+  function appBaseURL() { return location.origin + location.pathname.replace(/index\.html$/, ''); }
+  function smsPrefix(name) { return `${appBaseURL()}?src=kbank-sms&acct=${encodeURIComponent(name)}&setbal=`; }
+  async function openSMSHelper() {
+    const box = document.createElement('div'); box.className = 'smshelp';
+    const ac = state.ml.accounts, def = primaryAccount();
+    box.innerHTML = `<label class="dlg-sub">Account · บัญชี</label><select class="dlg-input" id="sms-acct">${ac.map(x => `<option value="${esc(x.id)}"${def && x.id === def.id ? ' selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
+      <div class="dlg-sub">URL template</div><div class="dlg-pre" id="sms-tpl"></div>
+      <div class="dlg-sub">Copy this prefix and add the balance number to the end:</div><div class="dlg-pre" id="sms-url"></div>
+      <div class="dlg-sub">Recommended on iPhone: the Shortcut copies the SMS, then you tap 📋 Paste KBank SMS on the balance card. The Safari URL only updates the Safari copy of the app, because the home-screen app keeps separate storage. See SHORTCUT.md.</div>`;
+    const sel = $('#sms-acct', box);
+    const upd = () => { const x = ac.find(a => a.id === sel.value) || def; $('#sms-url', box).textContent = smsPrefix(x.name); $('#sms-tpl', box).textContent = `${appBaseURL()}?setbal=<amount>&acct=${x.name}&src=kbank-sms`; };
+    sel.addEventListener('change', upd); upd();
+    const a = await dialog({ title: 'SMS auto-update · อัปเดตจาก SMS', msg: 'Update a balance from a KBank SMS (“… เหลือ 12,345.67บ”).', extra: box, stack: true,
+      buttons: [{ label: 'Copy URL prefix', value: 'copy', bold: true }, { label: 'Close', value: null }] });
+    if (a === 'copy') { const x = ac.find(q => q.id === sel.value) || def; toast((await copyText(smsPrefix(x.name))) ? 'URL prefix copied' : 'Copy failed'); }
+  }
+
   // account sheet
   let acform = null;
   function openAcctSheet(acct) {
@@ -748,6 +807,9 @@
     bindPeek();
     $('#ml-bank-btn').addEventListener('click', () => { if (state.ml.accounts.length === 1) openAcctSheet(state.ml.accounts[0]); else $('#ml-accts').scrollIntoView({ behavior: 'smooth', block: 'nearest' }); });
     $('#ml-add-acct').addEventListener('click', () => openAcctSheet(null));
+    $('#ml-paste-sms').addEventListener('click', pasteFromSMS);
+    $('#ac-paste').addEventListener('click', pasteIntoAcctSheet);
+    $('#btn-sms').addEventListener('click', openSMSHelper);
     $('#ac-cancel').addEventListener('click', closeAcctSheet);
     $('#ac-save').addEventListener('click', saveAcct);
     $('#acform').addEventListener('submit', ev => { ev.preventDefault(); saveAcct(); });
@@ -1032,7 +1094,7 @@
   async function unlockWith(dek) {
     currentDEK = dek; DB.setKey(dek);
     $('#lock').hidden = true; document.body.classList.remove('locked');
-    await loadAll(); render();
+    await loadAll(); render(); processPendingSMS();
   }
   async function tryFaceUnlock(auto) {
     if (!cryptoMeta || !cryptoMeta.prf) return;
@@ -1261,7 +1323,7 @@
     if (cryptoMeta) { showLock(true); }
     else try { await loadAll(); }
     catch (e) { console.error(e); await dialog({ title: 'Storage unavailable', msg: 'This browser blocked local storage (Private Browsing?). Open the app normally in Safari to save entries.\n\n' + (e && e.message || e) }); }
-    if (!cryptoMeta) render();
+    if (!cryptoMeta) { render(); processPendingSMS(); }
     requestPersist();
     maybeShowInstallHint().catch(() => {});
     if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
