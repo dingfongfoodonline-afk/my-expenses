@@ -99,8 +99,10 @@
       });
     }
     y += hh + 22;
+    const breaks = m._breaks = [y - 10];
     // ---- sections of entry cards ----
     for (const sec of m.sections || []) {
+      breaks.push(y - 4);
       if (draw) { ctx.font = f(700, 13); ctx.fillStyle = '#6B7280'; ctx.fillText(sec.title.toUpperCase(), PAD + 4, y + 12); }
       if (draw && sec.total) { ctx.textAlign = 'right'; ctx.fillStyle = th.accent; ctx.fillText(sec.total, W - PAD - 4, y + 12); ctx.textAlign = 'left'; }
       y += 24;
@@ -108,7 +110,7 @@
         if (draw) { rr(ctx, PAD, y, W - PAD * 2, 54, CARD_R); ctx.fillStyle = '#fff'; ctx.fill(); ctx.font = f(400, 14); ctx.fillStyle = '#9CA3AF'; ctx.fillText(sec.empty || 'No items', PAD + 18, y + 33); }
         y += 54 + 14; continue;
       }
-      for (const c of sec.cards) y = card(ctx, c, y, th, draw) + 12;
+      for (const c of sec.cards) { y = card(ctx, c, y, th, draw) + 12; c._bottom = y; breaks.push(y - 6); }
       y += 10;
     }
     // ---- footer ----
@@ -118,15 +120,17 @@
   function fit(ctx, s, w) { s = String(s); if (ctx.measureText(s).width <= w) return s; while (s && ctx.measureText(s + '…').width > w) s = s.slice(0, -1); return s + '…'; }
   function card(ctx, c, y, th, draw) {
     const x = PAD, w = W - PAD * 2, ix = x + 16, iw = w - 32;
-    const portrait = c.img && c.img.height > c.img.width * 1.1;
-    const photoH = c.img ? Math.round(portrait ? 340 : Math.min(260, Math.max(150, w * c.img.height / c.img.width))) : 0;
+    const hasPhoto = !!(c.iw && c.ih), portrait = hasPhoto && c.ih > c.iw * 1.1;
+    const photoH = hasPhoto ? Math.round(portrait ? 340 : Math.min(260, Math.max(150, w * c.ih / c.iw))) : 0;
+    c._top = y;
     ctx.font = f(700, 17); const amtW = ctx.measureText(c.amount).width;
     const nameLines = wrap(ctx, c.name, iw - amtW - 14, 2);
     ctx.font = f(400, 13); const noteLines = c.note ? wrap(ctx, c.note, iw, 3) : [];
     const h = (photoH ? photoH + 14 : 16) + nameLines.length * 22 + 22 + (noteLines.length ? 6 + noteLines.length * 18 : 0) + 16;
     if (draw) {
       ctx.save(); ctx.shadowColor = 'rgba(17,24,39,.08)'; ctx.shadowBlur = 14; ctx.shadowOffsetY = 4; rr(ctx, x, y, w, h, CARD_R); ctx.fillStyle = '#fff'; ctx.fill(); ctx.restore();
-      if (c.img) { ctx.save(); rr(ctx, x, y, w, photoH, CARD_R); ctx.rect(x, y + CARD_R, w, photoH - CARD_R); ctx.clip();
+      if (hasPhoto && !c.img) { ctx.save(); rr(ctx, x, y, w, photoH, CARD_R); ctx.fillStyle = '#EEF0F4'; ctx.fill(); ctx.restore(); }
+      if (hasPhoto && c.img) { ctx.save(); rr(ctx, x, y, w, photoH, CARD_R); ctx.rect(x, y + CARD_R, w, photoH - CARD_R); ctx.clip();
         if (portrait) { ctx.fillStyle = '#EEF0F4'; ctx.fillRect(x, y, w, photoH); const s = Math.min((photoH - 20) / c.img.height, (w - 20) / c.img.width), dw = c.img.width * s, dh = c.img.height * s;
           ctx.save(); ctx.shadowColor = 'rgba(0,0,0,.18)'; ctx.shadowBlur = 10; ctx.drawImage(c.img, x + (w - dw) / 2, y + (photoH - dh) / 2, dw, dh); ctx.restore(); } // receipts: show the whole photo
         else cover(ctx, c.img, x, y, w, photoH);
@@ -146,17 +150,54 @@
     }
     return y + h;
   }
-  async function render(model) {
-    for (const s of model.sections || []) for (const c of s.cards) if (c.photo) c.img = await loadImage(c.photo);
+  // iOS WebKit limits: one canvas <= 16,777,216 px and ~384 MB of canvas memory in total, and decoded photos are big.
+  // So: measure first (photo sizes only), cut the report into pages at card boundaries, decode photos lazily per page,
+  // free every canvas right after toBlob, and never fail silently.
+  const MAX_PAGE_H = 3200;          // logical px per page (x2 scale -> 1080 x 6400 = 6.9 M px)
+  const MAX_CANVAS_PX = 16000000;
+  function toBlobSafe(cv) {
+    return new Promise((res, rej) => {
+      const fallback = () => { try { const d = cv.toDataURL('image/png'); if (!d || d.length < 100) throw new Error('empty'); const bin = atob(d.split(',')[1]); const u8 = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i); res(new Blob([u8], { type: 'image/png' })); } catch (e) { rej(new Error('This phone could not create the image (canvas too large or out of memory).')); } };
+      try { if (!cv.toBlob) return fallback(); cv.toBlob(b => (b && b.size ? res(b) : fallback()), 'image/png'); } catch (_) { fallback(); }
+    });
+  }
+  function planPages(H, breaks) {
+    const cuts = []; let start = 0;
+    while (H - start > MAX_PAGE_H) {
+      const cand = breaks.filter(b => b > start + 200 && b <= start + MAX_PAGE_H);
+      const cut = cand.length ? cand[cand.length - 1] : start + MAX_PAGE_H;
+      cuts.push([start, cut]); start = cut;
+    }
+    cuts.push([start, H]); return cuts;
+  }
+  async function render(model, onProgress) {
+    const cards = []; for (const s of model.sections || []) for (const c of s.cards) cards.push(c);
+    let n = 0;
+    for (const c of cards) { // photo sizes only; bitmaps are released immediately
+      if (!c.photo) continue;
+      const im = await loadImage(c.photo); if (im) { c.iw = im.width; c.ih = im.height; if (im.close) im.close(); }
+      if (onProgress) onProgress(`Reading photos ${++n}…`);
+    }
     const probe = document.createElement('canvas').getContext('2d');
     const H = Math.ceil(paint(probe, model, false));
-    const MAXPX = 16e6; // iOS canvas area limit is ~16.7M pixels
-    let scale = 2; while (scale > 0.75 && W * scale * H * scale > MAXPX) scale -= 0.25;
-    const cv = document.createElement('canvas'); cv.width = Math.round(W * scale); cv.height = Math.round(H * scale);
-    const ctx = cv.getContext('2d'); ctx.scale(scale, scale); paint(ctx, model, true);
-    for (const s of model.sections || []) for (const c of s.cards) { if (c.img && c.img.close) c.img.close(); c.img = null; }
-    const blob = await new Promise(res => cv.toBlob(res, 'image/png'));
-    return { blob, width: cv.width, height: cv.height, scale };
+    const pages = planPages(H, model._breaks || []);
+    const out = [];
+    for (let i = 0; i < pages.length; i++) {
+      const [top, bot] = pages[i], ph = bot - top;
+      let scale = 2; while (scale > 0.5 && W * scale * ph * scale > MAX_CANVAS_PX) scale -= 0.25;
+      if (onProgress) onProgress(pages.length > 1 ? `Drawing page ${i + 1} of ${pages.length}…` : 'Drawing…');
+      const onPage = cards.filter(c => c.photo && c.iw && c._bottom > top && c._top < bot);
+      for (const c of onPage) c.img = await loadImage(c.photo);
+      const cv = document.createElement('canvas'); cv.width = Math.round(W * scale); cv.height = Math.round(ph * scale);
+      const ctx = cv.getContext('2d'); if (!ctx) throw new Error('Canvas is not available on this device.');
+      ctx.scale(scale, scale); ctx.translate(0, -top); paint(ctx, model, true);
+      if (pages.length > 1) { ctx.setTransform(scale, 0, 0, scale, 0, 0); ctx.font = f(600, 11); ctx.fillStyle = '#9CA3AF'; ctx.textAlign = 'right'; ctx.fillText(`${i + 1} / ${pages.length}`, W - 12, ph - 8); ctx.textAlign = 'left'; }
+      for (const c of onPage) { if (c.img && c.img.close) c.img.close(); c.img = null; }
+      const blob = await toBlobSafe(cv);
+      out.push({ blob, width: cv.width, height: cv.height, scale });
+      cv.width = cv.height = 0; // free canvas memory now (WebKit keeps it until GC otherwise)
+    }
+    return { pages: out, blob: out[0].blob, width: out[0].width, height: out.reduce((s, p) => s + p.height, 0) };
   }
-  root.Report = { render, wrap, THEMES };
+  root.Report = { VERSION: '1.6.1', render, wrap, planPages, THEMES };
 })(self);

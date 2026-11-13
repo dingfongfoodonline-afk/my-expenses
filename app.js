@@ -4,7 +4,7 @@
   const L = window.Logic;
   const $ = (s, el) => (el || document).querySelector(s);
   const $$ = (s, el) => Array.from((el || document).querySelectorAll(s));
-  const APP_VERSION = '1.6.0';
+  const APP_VERSION = '1.6.1';
 
   const state = {
     entries: [],
@@ -32,6 +32,9 @@
     t.style.animation = 'none'; void t.offsetWidth; t.style.animation = '';
     clearTimeout(toastT); toastT = setTimeout(() => { t.hidden = true; }, 2000);
   }
+  // never fail silently: surface unexpected errors as a toast
+  window.addEventListener('error', ev => { if (ev && ev.message) toast('Error: ' + ev.message); });
+  window.addEventListener('unhandledrejection', ev => { const r = ev && ev.reason; toast('Error: ' + (r && r.message || r || 'unknown')); });
   function fmtBytes(n) { if (!n && n !== 0) return '—'; const u = ['B', 'KB', 'MB', 'GB']; let i = 0; while (n >= 1024 && i < 3) { n /= 1024; i++; } return n.toFixed(i ? 1 : 0) + ' ' + u[i]; }
 
   const revokeLater = url => setTimeout(() => URL.revokeObjectURL(url), 2000); // let the DOM re-render before freeing
@@ -531,24 +534,47 @@
         .concat(rec.length ? [{ title: 'Repaid · คืนแล้ว', total: mlm(t.repaid), cards: rec.map(it => cardOf(it, 'mm', true)) }] : []),
       footer: 'My Money · made on this device · ' + fullStamp(now) };
   }
+  let exporting = false;
   async function exportReport(kind) {
-    toast('Creating report… · กำลังสร้าง');
-    let r;
-    try { r = await Report.render(kind === 'mother' ? mmReportModel() : mlReportModel()); }
-    catch (e) { console.error(e); await dialog({ title: 'Couldn’t create the report', msg: String(e && e.message || e) }); return; }
-    const name = `${kind === 'mother' ? 'money-mother' : 'main-money'}-report-${L.dayKey(Date.now())}.png`;
-    lastExport = { kind, name, width: r.width, height: r.height, blob: r.blob };
-    const file = new File([r.blob], name, { type: 'image/png' });
-    const url = URL.createObjectURL(r.blob);
-    const box = document.createElement('div'); box.className = 'exportprev'; box.innerHTML = `<img id="export-img" alt="Report preview" src="${url}">`;
-    const canShareFile = !!(navigator.canShare && navigator.share && navigator.canShare({ files: [file] }));
-    const download = () => { const el = document.createElement('a'); el.href = url; el.download = name; document.body.appendChild(el); el.click(); el.remove(); };
-    const a = await dialog({ title: (kind === 'mother' ? 'Money Mother' : 'Main Money') + ' report', msg: 'Made on this device. Nothing is uploaded.', extra: box, stack: true,
-      buttons: (canShareFile ? [{ label: 'Share / Save Image…', value: 'share', bold: true }] : []).concat([{ label: 'Download PNG', value: 'dl', bold: !canShareFile }, { label: 'Print / PDF', value: 'print' }, { label: 'Close', value: null }]) });
-    if (a === 'share') { try { await navigator.share({ files: [file], title: name }); } catch (e) { if (e && e.name !== 'AbortError') download(); } }
-    else if (a === 'dl') download();
-    else if (a === 'print') { const p = $('#printimg'); p.src = url; await new Promise(res => { if (p.complete) res(); else p.onload = res; }); window.print(); }
-    setTimeout(() => { if ($('#printimg').getAttribute('src') !== url) URL.revokeObjectURL(url); }, 60000);
+    if (exporting) return; exporting = true;
+    const label = kind === 'mother' ? 'Money Mother' : 'Main Money';
+    let cancelled = false;
+    // show the loading state immediately so a tap is never "nothing happens"
+    const prog = document.createElement('div'); prog.className = 'dlg-sub'; prog.id = 'export-progress'; prog.textContent = 'Starting…';
+    dialog({ title: 'Creating ' + label + ' report…', msg: 'Drawing on this device. Nothing is uploaded.', extra: prog, buttons: [{ label: 'Cancel', value: () => { cancelled = true; } }] });
+    try {
+      if (typeof window.Report === 'undefined' || !window.Report.render) throw new Error('The export module didn’t load (the app may be mid-update). Close the app completely and open it again.');
+      if (window.Report.VERSION && window.Report.VERSION !== APP_VERSION) throw new Error(`App files are out of sync (${APP_VERSION} / export ${window.Report.VERSION}). Close the app completely and open it again.`);
+      await new Promise(r => setTimeout(r, 30)); // let the loading dialog paint
+      const r = await window.Report.render(kind === 'mother' ? mmReportModel() : mlReportModel(), t => { prog.textContent = t; });
+      if (cancelled) return;
+      const day = L.dayKey(Date.now()), base = `${kind === 'mother' ? 'money-mother' : 'main-money'}-report-${day}`;
+      const files = r.pages.map((p, i) => new File([p.blob], r.pages.length > 1 ? `${base}-p${i + 1}.png` : `${base}.png`, { type: 'image/png' }));
+      const urls = r.pages.map(p => URL.createObjectURL(p.blob));
+      lastExport = { kind, name: files[0].name, names: files.map(f => f.name), pages: r.pages.length, width: r.pages[0].width, height: r.height, blob: r.pages[0].blob, blobs: r.pages.map(p => p.blob) };
+      const box = document.createElement('div'); box.className = 'exportprev';
+      box.innerHTML = urls.map((u, i) => `<img ${i ? '' : 'id="export-img"'} class="export-page" alt="Report page ${i + 1}" src="${u}">`).join('');
+      let canShareFiles = false; try { canShareFiles = !!(navigator.share && navigator.canShare && navigator.canShare({ files })); } catch (_) {}
+      const download = () => files.forEach((f, i) => { const el = document.createElement('a'); el.href = urls[i]; el.download = f.name; document.body.appendChild(el); el.click(); el.remove(); });
+      // navigator.share must run synchronously inside the tap (iOS rejects it after an await), so it is called from the button handler itself
+      const shareNow = () => {
+        try { navigator.share({ files, title: label + ' report' }).catch(e => { if (e && e.name !== 'AbortError') { toast('Share failed: ' + (e.message || e.name) + ' · downloading instead'); download(); } }); }
+        catch (e) { toast('Share failed · downloading instead'); download(); }
+        return 'share';
+      };
+      const a = await dialog({ title: label + ' report', msg: `${r.pages.length > 1 ? r.pages.length + ' pages · ' : ''}Made on this device. Nothing is uploaded.`, extra: box, stack: true,
+        buttons: (canShareFiles ? [{ label: 'Share / Save Image…', value: shareNow, bold: true }] : []).concat([{ label: r.pages.length > 1 ? 'Download PNGs' : 'Download PNG', value: 'dl', bold: !canShareFiles }, { label: 'Print / PDF', value: 'print' }, { label: 'Close', value: null }]) });
+      if (a === 'dl') download();
+      else if (a === 'print') {
+        const pa = $('#printarea'); pa.innerHTML = urls.map(u => `<img class="printimg" alt="" src="${u}">`).join('');
+        await Promise.all($$('img', pa).map(im => (im.complete ? 0 : new Promise(res => { im.onload = im.onerror = res; }))));
+        window.print();
+      }
+      setTimeout(() => { if (!$('#printarea img')) urls.forEach(u => URL.revokeObjectURL(u)); }, 120000);
+    } catch (e) {
+      console.warn('export failed', e);
+      if (!cancelled) await dialog({ title: 'Couldn’t create the report', msg: String(e && e.message || e) });
+    } finally { exporting = false; }
   }
   function mmCurrentText() { return L.mmText(state.mm.items, Date.now()); }
   function renderMoneyLeft() {
@@ -1456,7 +1482,23 @@
     if (iOS && !standalone && !(await DB.getKV('hintDismissed', false))) $('#installhint').hidden = false;
   }
 
+  let reloadingForUpdate = false;
+  // index.html / export.js / app.js must be the same version; if a stale cache mixed them, self-heal once
+  async function checkVersions() {
+    const meta = document.querySelector('meta[name="app-version"]'), v = meta && meta.content;
+    const ev = window.Report && window.Report.VERSION;
+    if (v === APP_VERSION && ev === APP_VERSION) return true;
+    console.warn('version mismatch', v, APP_VERSION, ev);
+    if (sessionStorage.getItem('my-expenses-vfix') !== APP_VERSION && 'serviceWorker' in navigator) {
+      sessionStorage.setItem('my-expenses-vfix', APP_VERSION);
+      try { for (const r of await navigator.serviceWorker.getRegistrations()) await r.unregister(); for (const k of await caches.keys()) await caches.delete(k); } catch (_) {}
+      reloadingForUpdate = true; location.reload(); return false; // app files only; your data (IndexedDB) is untouched
+    }
+    toast('App files are out of sync. Close the app completely and reopen it.');
+    return true;
+  }
   async function init() {
+    if (!(await checkVersions())) return;
     bind(); bindSecurity();
     try { cryptoMeta = await DB.loadCryptoMeta(); } catch (e) { console.error(e); }
     if (cryptoMeta) { showLock(true); }
@@ -1466,7 +1508,18 @@
     requestPersist();
     maybeShowInstallHint().catch(() => {});
     if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
-      navigator.serviceWorker.register('sw.js').catch(e => console.warn('SW registration failed', e));
+      const hadController = !!navigator.serviceWorker.controller;
+      navigator.serviceWorker.register('sw.js').then(reg => {
+        // home-screen apps resume without navigating, so ask for updates when the app comes back
+        document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => {}); });
+      }).catch(e => console.warn('SW registration failed', e));
+      // a new version took over: reload so every file is from the same version (wait if a sheet/dialog is open)
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (!hadController || reloadingForUpdate) return;
+        const busy = () => !$('#dlg').hidden || $$('.sheet.show').length;
+        const go = () => { reloadingForUpdate = true; location.reload(); };
+        if (!busy()) go(); else { toast('Update installed · it applies when you close this'); document.addEventListener('visibilitychange', () => { if (document.hidden) go(); }, { once: true }); }
+      });
     }
   }
 

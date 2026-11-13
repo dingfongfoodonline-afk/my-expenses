@@ -42,3 +42,10 @@ Files: index.html, style.css, logic.js (pure logic), db.js (IndexedDB), app.js (
 - **Export report** on both tabs draws a designed PNG on the device with `<canvas>` (`export.js`). It has a summary header, then a card per entry with its photo, amount and date/time.
 - Thai text uses the system fonts. No network, nothing uploaded.
 - On iPhone the share sheet saves or sends the image. Elsewhere it downloads. **Print / PDF** prints the same image through a print stylesheet.
+
+## Updates & export fixes (v1.6.1)
+- Fixed "Export does nothing" on iPhone: the old service worker could run a new `index.html` with an old cached `app.js`. The service worker now keeps one versioned cache. It installs atomically, checking that every file has the matching version, and serves the cached `index.html`. The app checks that its page, `app.js` and `export.js` versions match; if they don't, it clears the caches and reloads once.
+- New versions apply automatically: the app checks for an update each time it comes to the foreground and reloads once the update is ready.
+- Export shows a "Creating report…" dialog straight away, and any error appears in a dialog or toast instead of failing silently.
+- Big reports are split into several PNG pages so they stay inside iOS canvas limits. Photos are decoded one page at a time, and Share/Download/Print handle all the pages.
+- Deploy tip: upload all files in one commit, or upload `sw.js` last.

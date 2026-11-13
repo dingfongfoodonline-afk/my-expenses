@@ -405,6 +405,7 @@ body.locked #app, body.locked .tabbar, body.locked .fab { visibility: hidden; }
 @media print {
   body > *:not(#printarea) { display: none !important; }
   #printarea { display: block !important; }
-  #printimg { width: 100%; height: auto; }
+  #printarea img { display: block; width: 100%; height: auto; page-break-after: always; }
   @page { margin: 8mm; }
 }
+.exportprev img + img { margin-top: 6px; }
