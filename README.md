@@ -58,3 +58,9 @@ Files: index.html, style.css, logic.js (pure logic), db.js (IndexedDB), app.js (
 - How it works: every database write reports which tab it touched (db.js). The app then compares that tab's totals with the totals at the last change and bumps exactly one of the two times.
 - The times are stored with the data, encrypted when encryption is on, and included in backups. Data saved before v1.6.2 starts from the newest account/entry timestamp.
 - The exported report header shows both times.
+
+## Several photos per item + Money Mother import file (v1.6.3)
+- Each entry can now hold several photos. In the item sheet, the first photo is the main one (list thumbnail and long-press preview). The others show as a row of thumbnails: tap one to view it, × to remove it, or **+ Add photo** to add more (you can pick several photos at once). **Remove** on the main photo promotes the next one, and **Replace** swaps only the main photo.
+- The list row shows `📷 4` when an item has 4 photos. Export reports draw every photo in full (receipts are never cropped), with one extra photo card per additional photo.
+- Extra photos are encrypted like the main photo and included in backups (`morePhotos`).
+- A backup file marked `"partial": ["moneyMother"]` is a Money Mother-only file. Settings → Import shows **Add to Money Mother?** with Add and Cancel only (no Replace). It adds or updates those items by id, so importing the same file twice does not duplicate them, and it never changes Main Money.

@@ -44,7 +44,8 @@
     }));
   }
   function reqP(r) { return new Promise((res, rej) => { r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }); }
-  function canon(o) { const k = Object.keys(o).filter(x => x !== 'photo' && x !== 'thumb').sort(); return JSON.stringify(k.map(x => [x, o[x]])); }
+  function canon(o) { const k = Object.keys(o).filter(x => x !== 'photo' && x !== 'thumb' && x !== 'morePhotos').sort(); return JSON.stringify(k.map(x => [x, o[x]])); }
+  function sameMore(a, b) { const x = Array.isArray(a) ? a : [], y = Array.isArray(b) ? b : []; return x.length === y.length && x.every((v, i) => !(v instanceof Blob) || (y[i] instanceof Blob && y[i].size === v.size)); }
   function locked() { const e = new Error('Locked'); e.code = 'LOCKED'; return e; }
 
   // encrypt before the transaction (WebCrypto is async and would auto-commit an open transaction)
@@ -97,7 +98,7 @@
             const sealed = await Vault.encryptRecord(newKey, r, STORES[st]);
             const back = await Vault.decryptRecord(newKey, sealed, STORES[st]); // verify before committing
             if (canon(back) !== canon(r) || (r.photo instanceof Blob && (!back.photo || back.photo.size !== r.photo.size)) ||
-                (r.thumb instanceof Blob && (!back.thumb || back.thumb.size !== r.thumb.size))) throw new Error('Verification failed for ' + st);
+                (r.thumb instanceof Blob && (!back.thumb || back.thumb.size !== r.thumb.size)) || !sameMore(r.morePhotos, back.morePhotos)) throw new Error('Verification failed for ' + st);
             out[st].push(sealed);
           } else out[st].push(r);
         }

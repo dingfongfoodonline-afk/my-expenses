@@ -413,3 +413,12 @@ body.locked #app, body.locked .tabbar, body.locked .fab { visibility: hidden; }
 .stamps { display: flex; flex-wrap: wrap; column-gap: 12px; row-gap: 1px; font-size: 11.5px; line-height: 1.35; color: var(--text2); margin: 0 0 4px; }
 .stamps[hidden] { display: none; }
 .stamps b { font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+/* v1.6.3: several photos per item */
+#ml-photo-count { font-weight: 400; color: var(--text2); }
+.photo-more { display: flex; gap: 8px; overflow-x: auto; padding: 0 10px 10px; -webkit-overflow-scrolling: touch; }
+.photo-more[hidden] { display: none; }
+.pm { position: relative; flex: 0 0 72px; width: 72px; height: 72px; border-radius: 10px; overflow: hidden; background: var(--fill); }
+.pm img { width: 100%; height: 100%; object-fit: cover; display: block; cursor: pointer; }
+.pm-x { position: absolute; top: 3px; right: 3px; width: 22px; height: 22px; border-radius: 50%; background: rgba(0,0,0,.55); color: #fff; font-size: 15px; line-height: 22px; text-align: center; }
+.pm-add { display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--accent); border: 2px dashed var(--fill2); background: transparent; cursor: pointer; }
+.pm-add span { font-size: 24px; line-height: 1; } .pm-add small { font-size: 11px; }

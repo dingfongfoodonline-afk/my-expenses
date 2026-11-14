@@ -37,6 +37,11 @@
     if (maxLines && out.length > maxLines) { const cut = out.slice(0, maxLines); let l = cut[maxLines - 1]; while (l && ctx.measureText(l + '…').width > maxW) l = l.slice(0, -1); cut[maxLines - 1] = l + '…'; return cut; }
     return out;
   }
+  function contain(ctx, img, x, y, w, h) { // whole image, centred on a light background
+    ctx.fillStyle = '#EEF0F4'; ctx.fillRect(x, y, w, h);
+    const s = Math.min(w / img.width, h / img.height), dw = img.width * s, dh = img.height * s;
+    ctx.drawImage(img, x + (w - dw) / 2, y + (h - dh) / 2, dw, dh);
+  }
   function cover(ctx, img, x, y, w, h) {
     const iw = img.width, ih = img.height, s = Math.max(w / iw, h / ih), sw = w / s, sh = h / s;
     ctx.drawImage(img, (iw - sw) / 2, (ih - sh) / 2, sw, sh, x, y, w, h);
@@ -124,8 +129,20 @@
   function card(ctx, c, y, th, draw) {
     const x = PAD, w = W - PAD * 2, ix = x + 16, iw = w - 32;
     const hasPhoto = !!(c.iw && c.ih), portrait = hasPhoto && c.ih > c.iw * 1.1;
-    const photoH = hasPhoto ? Math.round(portrait ? 340 : Math.min(260, Math.max(150, w * c.ih / c.iw))) : 0;
+    // v1.6.3: show the WHOLE photo (receipts, slips): height follows the photo's aspect, capped; never cropped
+    const photoH = hasPhoto ? Math.round(Math.max(150, Math.min(portrait ? 720 : 520, w * c.ih / c.iw))) : 0;
     c._top = y;
+    if (c.cont) { // v1.6.3: extra photo of the item above
+      const h = (photoH || 60) + 12 + 20;
+      if (draw) {
+        ctx.save(); ctx.shadowColor = 'rgba(17,24,39,.08)'; ctx.shadowBlur = 14; ctx.shadowOffsetY = 4; rr(ctx, x, y, w, h, CARD_R); ctx.fillStyle = '#fff'; ctx.fill(); ctx.restore();
+        if (hasPhoto) { ctx.save(); rr(ctx, x, y, w, photoH, CARD_R); ctx.rect(x, y + CARD_R, w, photoH - CARD_R); ctx.clip(); ctx.fillStyle = '#EEF0F4'; ctx.fillRect(x, y, w, photoH);
+          if (c.img) contain(ctx, c.img, x, y, w, photoH);
+          ctx.restore(); }
+        ctx.font = f(500, 12.5); ctx.fillStyle = '#6B7280'; ctx.fillText(fit(ctx, c.caption || c.name, iw), ix, y + (photoH || 60) + 12 + 8);
+      }
+      return y + h;
+    }
     ctx.font = f(700, 17); const amtW = ctx.measureText(c.amount).width;
     const nameLines = wrap(ctx, c.name, iw - amtW - 14, 2);
     ctx.font = f(400, 13); const noteLines = c.note ? wrap(ctx, c.note, iw, 3) : [];
@@ -134,9 +151,7 @@
       ctx.save(); ctx.shadowColor = 'rgba(17,24,39,.08)'; ctx.shadowBlur = 14; ctx.shadowOffsetY = 4; rr(ctx, x, y, w, h, CARD_R); ctx.fillStyle = '#fff'; ctx.fill(); ctx.restore();
       if (hasPhoto && !c.img) { ctx.save(); rr(ctx, x, y, w, photoH, CARD_R); ctx.fillStyle = '#EEF0F4'; ctx.fill(); ctx.restore(); }
       if (hasPhoto && c.img) { ctx.save(); rr(ctx, x, y, w, photoH, CARD_R); ctx.rect(x, y + CARD_R, w, photoH - CARD_R); ctx.clip();
-        if (portrait) { ctx.fillStyle = '#EEF0F4'; ctx.fillRect(x, y, w, photoH); const s = Math.min((photoH - 20) / c.img.height, (w - 20) / c.img.width), dw = c.img.width * s, dh = c.img.height * s;
-          ctx.save(); ctx.shadowColor = 'rgba(0,0,0,.18)'; ctx.shadowBlur = 10; ctx.drawImage(c.img, x + (w - dw) / 2, y + (photoH - dh) / 2, dw, dh); ctx.restore(); } // receipts: show the whole photo
-        else cover(ctx, c.img, x, y, w, photoH);
+        contain(ctx, c.img, x, y, w, photoH);
         ctx.restore();
         ctx.save(); ctx.beginPath(); ctx.rect(x, y + photoH - 1, w, 1); ctx.fillStyle = 'rgba(0,0,0,.06)'; ctx.fill(); ctx.restore(); }
       let ty = y + (photoH ? photoH + 14 : 16);
@@ -202,5 +217,5 @@
     }
     return { pages: out, blob: out[0].blob, width: out[0].width, height: out.reduce((s, p) => s + p.height, 0) };
   }
-  root.Report = { VERSION: '1.6.2', render, wrap, planPages, THEMES };
+  root.Report = { VERSION: '1.6.3', render, wrap, planPages, THEMES };
 })(self);

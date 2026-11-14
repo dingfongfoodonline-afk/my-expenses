@@ -4,7 +4,7 @@
   const L = window.Logic;
   const $ = (s, el) => (el || document).querySelector(s);
   const $$ = (s, el) => Array.from((el || document).querySelectorAll(s));
-  const APP_VERSION = '1.6.2';
+  const APP_VERSION = '1.6.3';
 
   const state = {
     entries: [],
@@ -519,11 +519,14 @@
     dropThumb(id);
   }
   async function mlPutItem(it) { return putBookItem('ml', it); }
+  // v1.6.3: an item can hold several photos: photo/thumb = the first, morePhotos = the rest (Blob[])
+  function morePhotosOf(it) { return it && Array.isArray(it.morePhotos) ? it.morePhotos.filter(b => b instanceof Blob) : []; }
+  function photoCount(it) { return it && it.photo ? 1 + morePhotosOf(it).length : 0; }
   function mlItemHTML(it, rec, book) {
     const url = thumbURL(it); const mm = book === 'mm';
     const ico = url ? `<div class="ico"><img src="${url}" alt="" loading="lazy" draggable="false"><span class="badge">📷</span></div>` : '';
     const sub = rec ? [it.receivedAt ? (mm ? 'repaid ' : 'received ') + esc(fmtStamp(it.receivedAt)) : null, it.addedToBank ? 'added to bank' : null, mm && it.date ? 'spent ' + esc(fmtDate(it.date)) : null].filter(Boolean).join(' · ')
-      : [it.date ? esc(fmtDate(it.date)) : null, it.note ? esc(it.note.split('\n')[0]) : null, it.photo ? '📷' : null].filter(Boolean).join(' · ');
+      : [it.date ? esc(fmtDate(it.date)) : null, it.note ? esc(it.note.split('\n')[0]) : null, it.photo ? '📷' + (photoCount(it) > 1 ? ' ' + photoCount(it) : '') : null].filter(Boolean).join(' · ');
     return `<div class="mlitem ${rec ? 'rec' : ''}" data-id="${esc(it.id)}" data-peek="${it.photo ? esc(it.id) : ''}">
       <button class="mldel" data-del="${esc(it.id)}" aria-label="Delete ${esc(it.name)}"><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg><span>Delete · ลบ</span></button>
       <div class="mlslide"><button class="mlcheck ${rec ? 'done' : ''}" data-${rec ? 'unrecv' : 'recv'}="${esc(it.id)}" aria-label="${rec ? (mm ? 'Move back to owed' : 'Move back to pending') : (mm ? 'Mark repaid' : 'Mark received')}"><i></i></button>
@@ -560,6 +563,10 @@
     const badge = book === 'mm' ? (rec ? { badge: 'Repaid · คืนแล้ว' } : { badge: 'Owed · ค้าง', badgeBg: '#FFF7ED', badgeColor: '#C2410C' }) : (rec ? { badge: 'Received' } : {});
     return Object.assign({ name: it.name, amount: mlm(it.amount), when, tag: it.tag || '', note: it.note || '', photo: it.photo || null, muted: !!rec }, badge);
   }
+  function cardsOf(it, book, rec) { // main card + one photo card per extra photo (keeps report pages small for iOS)
+    const more = it.photo ? morePhotosOf(it) : [], n = more.length + 1;
+    return [cardOf(it, book, rec)].concat(more.map((p, i) => ({ cont: true, name: it.name, caption: `${it.name} · รูป ${i + 2}/${n}`, amount: '', when: '', photo: p, muted: !!rec })));
+  }
   function mlReportModel() {
     const ml = state.ml, t = L.mlTotals(ml.accounts, ml.items), now = Date.now();
     const pend = L.sortItems(ml.items.filter(i => i.status !== 'received'));
@@ -569,8 +576,8 @@
         { label: 'Pending · รอรับ', value: mlm(t.pending), sub: t.pendingCount + (t.pendingCount === 1 ? ' entry' : ' entries') }],
       rows: ml.accounts.map(x => ({ icon: ACCT_ICON[x.type], label: x.name, sub: acctTypeLabel(x.type) + (x.updated ? ' · updated ' + fullStamp(x.updated) : ''), value: mlm(x.balance) }))
         .concat([{ icon: '⏳', label: 'Entries · รายการ', sub: t.pendingCount + ' pending', value: mlm(t.pending) }, { icon: '🧮', label: 'รวม · Total', sub: 'accounts + entries', value: mlm(t.total), bold: true }]),
-      sections: [{ title: 'Entries · รายการ', total: mlm(t.pending), cards: pend.map(it => cardOf(it, 'ml', false)), empty: 'No pending entries' }]
-        .concat(rec.length ? [{ title: 'Received · ได้รับแล้ว', cards: rec.map(it => cardOf(it, 'ml', true)) }] : []),
+      sections: [{ title: 'Entries · รายการ', total: mlm(t.pending), cards: pend.flatMap(it => cardsOf(it, 'ml', false)), empty: 'No pending entries' }]
+        .concat(rec.length ? [{ title: 'Received · ได้รับแล้ว', cards: rec.flatMap(it => cardsOf(it, 'ml', true)) }] : []),
       footer: 'My Money · made on this device · ' + fullStamp(now) };
   }
   function mmReportModel() {
@@ -581,8 +588,8 @@
       stats: [{ label: 'Outstanding · ค้าง', value: mlm(t.owed), sub: t.owedCount + (t.owedCount === 1 ? ' item' : ' items') },
         { label: 'Repaid · คืนแล้ว', value: mlm(t.repaid), sub: t.repaidCount + (t.repaidCount === 1 ? ' item' : ' items') }],
       rows: [],
-      sections: [{ title: 'Owed · แม่ค้าง', total: mlm(t.owed), cards: owed.map(it => cardOf(it, 'mm', false)), empty: 'Nothing owed 🎉' }]
-        .concat(rec.length ? [{ title: 'Repaid · คืนแล้ว', total: mlm(t.repaid), cards: rec.map(it => cardOf(it, 'mm', true)) }] : []),
+      sections: [{ title: 'Owed · แม่ค้าง', total: mlm(t.owed), cards: owed.flatMap(it => cardsOf(it, 'mm', false)), empty: 'Nothing owed 🎉' }]
+        .concat(rec.length ? [{ title: 'Repaid · คืนแล้ว', total: mlm(t.repaid), cards: rec.flatMap(it => cardsOf(it, 'mm', true)) }] : []),
       footer: 'My Money · made on this device · ' + fullStamp(now) };
   }
   let exporting = false;
@@ -823,7 +830,7 @@
     $('#ml-seg [data-status="received"]').textContent = mm ? 'Repaid · คืนแล้ว' : 'Received · ได้รับแล้ว';
     $('#ml-name').placeholder = mm ? 'What did you pay for Mom? · จ่ายอะไรให้แม่' : 'Name · ชื่อรายการ (e.g. Savings Acc, AIA)';
     $('#mlsheet').classList.toggle('mmsheet', mm);
-    mlform = { book, editing: item || null, status: item ? item.status || 'pending' : 'pending', photo: item ? item.photo || null : null, thumb: item ? item.thumb || null : null };
+    mlform = { book, editing: item || null, status: item ? item.status || 'pending' : 'pending', photo: item ? item.photo || null : null, thumb: item ? item.thumb || null : null, more: item && item.photo ? morePhotosOf(item).slice() : [] };
     $('#ml-sheet-title').textContent = mm ? (item ? 'Edit Mom Item' : 'New Mom Item') : (item ? 'Edit Item' : 'New Item');
     $('#ml-amount').value = item ? (item.amount / 100).toFixed(2).replace(/\.00$/, '') : '';
     $('#ml-name').value = item ? item.name : '';
@@ -854,11 +861,19 @@
     const cur = $('#ml-tag').value.trim();
     $('#ml-tagchips').innerHTML = [...tags].map(t => `<button type="button" class="chip ${t === cur ? 'on' : ''}" data-tag="${esc(t)}">${esc(t)}</button>`).join('');
   }
+  let mlMoreURLs = [];
   function mlRenderPhoto() {
     if (mlPhotoURL) { URL.revokeObjectURL(mlPhotoURL); mlPhotoURL = null; }
+    mlMoreURLs.forEach(u => URL.revokeObjectURL(u)); mlMoreURLs = [];
     const has = !!(mlform && mlform.photo);
     $('#ml-photo-add').hidden = has; $('#ml-photo-prev').hidden = !has;
     if (has) { mlPhotoURL = URL.createObjectURL(mlform.photo); $('#ml-photo-img').src = mlPhotoURL; } else $('#ml-photo-img').removeAttribute('src');
+    const more = has ? mlform.more : [], box = $('#ml-photo-more');
+    box.hidden = !has;
+    box.innerHTML = more.map((b, i) => { const u = URL.createObjectURL(b); mlMoreURLs.push(u);
+      return `<div class="pm"><img src="${u}" alt="Photo ${i + 2}" data-pmview="${i}"><button type="button" class="pm-x" data-pmdel="${i}" aria-label="Remove photo ${i + 2}">×</button></div>`; }).join('') +
+      (has ? `<label class="pm pm-add" for="ml-photo" id="ml-photo-addmore"><span>+</span><small>Add photo</small></label>` : '');
+    $('#ml-photo-count').textContent = has ? '(' + (1 + more.length) + ')' : '';
   }
   async function saveMLForm() {
     if (!mlform) return;
@@ -870,7 +885,8 @@
     const now = Date.now(); const prev = mlform.editing; const book = mlform.book || 'ml', list = bookItems(book);
     const base = prev || { id: (book === 'mm' ? 'm-' : 'i-') + L.uid(), created: now, order: list.length ? Math.max(...list.map(i => i.order || 0)) + 1 : 0 };
     const it = Object.assign({}, base, { name, amount, groupId: null, date: $('#ml-date').value || '', tag: $('#ml-tag').value.trim(), note: $('#ml-note').value.trim(), status: mlform.status,
-      photo: mlform.photo || null, thumb: mlform.thumb || null, updated: now });
+      photo: mlform.photo || null, thumb: mlform.thumb || null, morePhotos: mlform.photo ? mlform.more.slice() : [], updated: now });
+    if (it.photo && !it.thumb) { try { it.thumb = (await processPhoto(it.photo, 1600, 192)).thumb; } catch (_) {} }
     const wasRec = prev && prev.status === 'received';
     if (it.status === 'received' && !wasRec) { it.receivedAt = now; it.addedToBank = false; }
     if (it.status !== 'received') { it.receivedAt = null; }
@@ -1025,15 +1041,36 @@
     $('#ml-seg').addEventListener('click', ev => { const b = ev.target.closest('[data-status]'); if (b && mlform) { mlSetStatus(b.dataset.status); haptic(); } });
     $('#ml-tagchips').addEventListener('click', ev => { const b = ev.target.closest('[data-tag]'); if (!b) return; const inp = $('#ml-tag'); inp.value = inp.value.trim() === b.dataset.tag ? '' : b.dataset.tag; mlRenderTagChips(); });
     $('#ml-tag').addEventListener('input', mlRenderTagChips);
+    let mlPhotoMode = 'add'; // 'replace' = swap the first photo, 'add' = append (first file becomes the main photo if none)
+    $('#ml-photo-replace').addEventListener('click', () => { mlPhotoMode = 'replace'; });
+    $('#ml-photo-add').addEventListener('click', () => { mlPhotoMode = 'add'; });
+    $('#ml-photo-more').addEventListener('click', ev => {
+      if (!mlform) return;
+      if (ev.target.closest('#ml-photo-addmore')) { mlPhotoMode = 'add'; return; }
+      const d = ev.target.closest('[data-pmdel]'); if (d) { mlform.more.splice(+d.dataset.pmdel, 1); mlRenderPhoto(); return; }
+      const v = ev.target.closest('[data-pmview]'); if (v) openViewer(mlform.more[+v.dataset.pmview]);
+    });
     $('#ml-photo').addEventListener('change', async ev => {
-      const f = ev.target.files && ev.target.files[0]; ev.target.value = '';
-      if (!f || !mlform) return;
+      const files = Array.from(ev.target.files || []); ev.target.value = '';
+      const mode = mlPhotoMode; mlPhotoMode = 'add';
+      if (!files.length || !mlform) return;
       const add = $('#ml-photo-add span'); const old = add.textContent; add.textContent = 'Processing…';
-      try { const p = await processPhoto(f); if (mlform) { mlform.photo = p.photo; mlform.thumb = p.thumb; mlRenderPhoto(); toast('Photo attached · ' + fmtBytes(p.photo.size)); } }
-      catch (e) { dialog({ title: 'Photo problem', msg: (e && e.message) || 'Could not use that photo.' }); }
+      try {
+        let n = 0, bytes = 0;
+        for (const f of mode === 'replace' ? files.slice(0, 1) : files) {
+          const p = await processPhoto(f); if (!mlform) return;
+          if (mode === 'replace' || !mlform.photo) { mlform.photo = p.photo; mlform.thumb = p.thumb; } else mlform.more.push(p.photo);
+          n++; bytes += p.photo.size;
+        }
+        mlRenderPhoto(); toast((n > 1 ? n + ' photos attached · ' : 'Photo attached · ') + fmtBytes(bytes));
+      } catch (e) { mlRenderPhoto(); dialog({ title: 'Photo problem', msg: (e && e.message) || 'Could not use that photo.' }); }
       finally { add.textContent = old; }
     });
-    $('#ml-photo-remove').addEventListener('click', () => { if (mlform) { mlform.photo = null; mlform.thumb = null; mlRenderPhoto(); } });
+    $('#ml-photo-remove').addEventListener('click', () => { // removing the main photo promotes the next one
+      if (!mlform) return;
+      if (mlform.more.length) { mlform.photo = mlform.more.shift(); mlform.thumb = null; } else { mlform.photo = null; mlform.thumb = null; }
+      mlRenderPhoto();
+    });
     $('#ml-photo-view').addEventListener('click', () => { if (mlform && mlform.photo) openViewer(mlform.photo); });
     $('#ml-photo-img').addEventListener('click', () => { if (mlform && mlform.photo) openViewer(mlform.photo); });
     $('#ml-delete').addEventListener('click', deleteMLItem);
@@ -1102,6 +1139,7 @@
       const o = Object.assign({}, it);
       o.photo = it.photo ? await blobToDataURL(it.photo) : null;
       o.thumb = it.thumb ? await blobToDataURL(it.thumb) : null;
+      o.morePhotos = []; for (const b of morePhotosOf(it)) o.morePhotos.push(await blobToDataURL(b));
       items.push(o);
     }
     const mmItems = [];
@@ -1109,6 +1147,7 @@
       const o = Object.assign({}, it);
       o.photo = it.photo ? await blobToDataURL(it.photo) : null;
       o.thumb = it.thumb ? await blobToDataURL(it.thumb) : null;
+      o.morePhotos = []; for (const b of morePhotosOf(it)) o.morePhotos.push(await blobToDataURL(b));
       mmItems.push(o);
     }
     return { app: 'my-expenses', format: 5, appVersion: APP_VERSION, exportedAt: new Date().toISOString(),
@@ -1148,9 +1187,11 @@
     for (const r of Array.isArray(arr) ? arr : []) {
       const it = { id: String(r.id || ''), groupId: r.groupId == null ? null : String(r.groupId), name: String(r.name || '').trim(), amount: Number(r.amount), date: /^\d{4}-\d\d-\d\d$/.test(r.date || '') ? r.date : '', tag: String(r.tag || ''), note: String(r.note || ''),
         status: r.status === 'received' ? 'received' : 'pending', receivedAt: Number(r.receivedAt) || null, addedToBank: !!r.addedToBank,
-        order: Number(r.order) || 0, created: Number(r.created) || Date.now(), updated: Number(r.updated) || Number(r.created) || Date.now(), photo: null, thumb: null };
+        order: Number(r.order) || 0, created: Number(r.created) || Date.now(), updated: Number(r.updated) || Number(r.created) || Date.now(), photo: null, thumb: null, morePhotos: [] };
       if (!it.id || !it.name || !Number.isInteger(it.amount) || it.amount <= 0) { bad++; continue; }
       try { if (r.photo) it.photo = dataURLToBlob(r.photo); if (r.thumb) it.thumb = dataURLToBlob(r.thumb); } catch (_) {}
+      for (const u of Array.isArray(r.morePhotos) ? r.morePhotos : []) { try { it.morePhotos.push(dataURLToBlob(u)); } catch (_) {} } // v1.6.3
+      if (!it.photo && it.morePhotos.length) { it.photo = it.morePhotos.shift(); it.thumb = null; }
       items.push(it);
     }
     return { items, bad };
@@ -1186,7 +1227,7 @@
     const ml = parseMoneyLeft(data.moneyLeft);
     const mm = parseMother(data.moneyMother);
     const partial = Array.isArray(data.partial) ? data.partial : null;
-    return { entries, bad, ml, mm, mlOnly: !!(partial && partial.length === 1 && partial[0] === 'moneyLeft'),
+    return { entries, bad, ml, mm, mlOnly: !!(partial && partial.length === 1 && partial[0] === 'moneyLeft'), mmOnly: !!(partial && partial.length === 1 && partial[0] === 'moneyMother'),
       settings: { start: Number.isInteger(s.start) ? s.start : 0, symbol: typeof s.symbol === 'string' && s.symbol ? s.symbol.slice(0, 4) : '฿', customCats: Array.isArray(s.customCats) ? s.customCats.filter(c => c && c.id && c.name) : [] }, exportedAt: data.exportedAt };
   }
   async function applyMoneyLeft(ml, replace) {
@@ -1243,6 +1284,18 @@
     const mlDesc = parsed.ml ? `Main Money: ${parsed.ml.accounts.length > 1 ? parsed.ml.accounts.length + ' accounts' : 'bank'} ${money(parsed.ml.bank, { auto: true })}, ${parsed.ml.items.length} entries, ${parsed.ml.snaps.length} snapshots.` : '';
     const resetThumbs = () => { thumbURLs.forEach(v => revokeLater(v.url)); thumbURLs.clear(); };
 
+    if (parsed.mmOnly) { // v1.6.3: Money Mother-only file (e.g. pre-entered items): adds to Money Mother, never touches Main Money
+      const mm = parsed.mm;
+      if (!mm || !mm.items.length) { await dialog({ title: 'Can’t import', msg: 'This file has no Money Mother items.' }); return; }
+      const have = new Set(state.mm.items.map(i => i.id));
+      const fresh = mm.items.filter(i => !have.has(i.id)).length, again = mm.items.length - fresh;
+      const sum = mm.items.reduce((s, i) => s + i.amount, 0), pics = mm.items.reduce((s, i) => s + photoCount(i), 0);
+      const go = await dialog({ title: 'Add to Money Mother? · เพิ่มในเงินแม่', msg: `${mm.items.length} items · ${mlm(sum)} · ${pics} photos.\n${again ? `${again} already here (updated, not duplicated). ` : ''}${fresh ? `${fresh} new.` : ''}${mm.bad ? `\n${mm.bad} invalid items will be skipped.` : ''}\n\nMain Money is not changed.`,
+        buttons: [{ label: 'Add to Money Mother', value: true, bold: true }, { label: 'Cancel', value: false }] });
+      if (!go) return;
+      await holdStamps(async () => { await applyMother(mm, false); await loadAll(); });
+      resetThumbs(); toast(`Money Mother: ${mm.items.length} items added`); requestPersist(); setView('mother'); render(); return;
+    }
     if (parsed.mlOnly) {
       if (!parsed.ml) { await dialog({ title: 'Can’t restore', msg: 'This file has no Main Money data.' }); return; }
       const mode = await dialog({ title: 'Restore Main Money?', msg: `${mlDesc}\nFrom ${when}. Older expense entries are not touched.\n\nMerge keeps your current data. Replace erases it first.`,

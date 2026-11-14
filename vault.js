@@ -73,6 +73,7 @@
 
   // ---- record encryption (Blobs encrypted separately) ----
   const BLOB_FIELDS = ['photo', 'thumb'];
+  const BLOB_LISTS = ['morePhotos']; // v1.6.3: extra photos of one item (Blob[])
   async function encryptRecord(dek, rec, keyField) {
     const plain = {}, blobs = {};
     for (const k of Object.keys(rec)) {
@@ -81,6 +82,10 @@
       if (BLOB_FIELDS.includes(k) && v instanceof Blob) {
         const { iv, ct } = await encBytes(dek, await v.arrayBuffer());
         blobs[k] = { iv, ct, type: v.type || 'image/jpeg' };
+      } else if (BLOB_LISTS.includes(k) && Array.isArray(v) && v.length && v.every(b => b instanceof Blob)) {
+        const list = [];
+        for (const b of v) { const { iv, ct } = await encBytes(dek, await b.arrayBuffer()); list.push({ iv, ct, type: b.type || 'image/jpeg' }); }
+        blobs[k] = list;
       } else plain[k] = v;
     }
     const { iv, ct } = await encBytes(dek, te.encode(JSON.stringify(plain)));
@@ -90,7 +95,11 @@
     if (!r || !r._enc) return r;
     const obj = JSON.parse(td.decode(await decBytes(dek, r.iv, r.ct)));
     obj[keyField] = r[keyField];
-    for (const k of Object.keys(r.blobs || {})) { const b = r.blobs[k]; obj[k] = new Blob([await decBytes(dek, b.iv, b.ct)], { type: b.type }); }
+    for (const k of Object.keys(r.blobs || {})) {
+      const b = r.blobs[k];
+      if (Array.isArray(b)) { const list = []; for (const x of b) list.push(new Blob([await decBytes(dek, x.iv, x.ct)], { type: x.type })); obj[k] = list; }
+      else obj[k] = new Blob([await decBytes(dek, b.iv, b.ct)], { type: b.type });
+    }
     return obj;
   }
 

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="app-version" content="1.6.2">
+<meta name="app-version" content="1.6.3">
 <title>My Expenses</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -333,7 +333,7 @@
     <div class="group" style="margin-top:14px">
       <textarea id="ml-note" rows="2" placeholder="Note · หมายเหตุ (optional)" maxlength="500"></textarea>
     </div>
-    <div class="flabel">Photo · รูป</div>
+    <div class="flabel">Photos · รูป <span id="ml-photo-count"></span></div>
     <div class="photobox">
       <label class="photo-add" for="ml-photo" id="ml-photo-add">
         <svg viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
@@ -343,11 +343,12 @@
         <img id="ml-photo-img" alt="Attached photo">
         <div class="photo-actions">
           <button type="button" class="pill" id="ml-photo-view">View</button>
-          <label class="pill" for="ml-photo">Replace</label>
+          <label class="pill" for="ml-photo" id="ml-photo-replace">Replace</label>
           <button type="button" class="pill danger" id="ml-photo-remove">Remove</button>
         </div>
       </div>
-      <input type="file" id="ml-photo" accept="image/*" hidden>
+      <div class="photo-more" id="ml-photo-more" hidden></div>
+      <input type="file" id="ml-photo" accept="image/*" multiple hidden>
     </div>
     <button type="button" class="deletebtn" id="ml-delete" hidden>Delete item · ลบรายการ</button>
     <div class="meta" id="ml-meta"></div>
