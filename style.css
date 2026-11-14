@@ -409,3 +409,7 @@ body.locked #app, body.locked .tabbar, body.locked .fab { visibility: hidden; }
   @page { margin: 8mm; }
 }
 .exportprev img + img { margin-top: 6px; }
+/* v1.6.2: last-updated times at the very top of Main Money / Money Mother (below the notch: #app pads by safe-area-inset-top) */
+.stamps { display: flex; flex-wrap: wrap; column-gap: 12px; row-gap: 1px; font-size: 11.5px; line-height: 1.35; color: var(--text2); margin: 0 0 4px; }
+.stamps[hidden] { display: none; }
+.stamps b { font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }

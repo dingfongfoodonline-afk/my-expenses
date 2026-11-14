@@ -49,3 +49,12 @@ Files: index.html, style.css, logic.js (pure logic), db.js (IndexedDB), app.js (
 - Export shows a "Creating report…" dialog straight away, and any error appears in a dialog or toast instead of failing silently.
 - Big reports are split into several PNG pages so they stay inside iOS canvas limits. Photos are decoded one page at a time, and Share/Download/Print handle all the pages.
 - Deploy tip: upload all files in one commit, or upload `sw.js` last.
+
+## Last updated times (v1.6.2)
+- At the very top of Main Money and Money Mother, each tab shows two times of its own:
+  - **Balance updated · ยอดอัปเดต**: the last change to a total. This covers adding or deleting an entry, changing an amount, marking received/repaid or moving an item back, changing an account balance (including SMS link and Paste), adding or deleting an account that has money in it, and a restore that changes totals.
+  - **Other update · อัปเดตอื่นๆ**: the last change that left every total the same. This covers name, note, date, tag, photo, account rename, a 0-balance account, a snapshot, and a restore with the same totals.
+- Viewing, reloading, unlocking and exporting never change either time.
+- How it works: every database write reports which tab it touched (db.js). The app then compares that tab's totals with the totals at the last change and bumps exactly one of the two times.
+- The times are stored with the data, encrypted when encryption is on, and included in backups. Data saved before v1.6.2 starts from the newest account/entry timestamp.
+- The exported report header shows both times.

@@ -4,7 +4,7 @@
   const L = window.Logic;
   const $ = (s, el) => (el || document).querySelector(s);
   const $$ = (s, el) => Array.from((el || document).querySelectorAll(s));
-  const APP_VERSION = '1.6.1';
+  const APP_VERSION = '1.6.2';
 
   const state = {
     entries: [],
@@ -73,6 +73,53 @@
     return dialog({ title, msg, buttons: [{ label: 'Cancel', value: false }, { label: okLabel || 'OK', value: true, bold: !danger, danger: !!danger }] });
   }
 
+  // ---------- last updated (v1.6.2) ----------
+  // Every DB write reports which stores/keys it touched (db.js). On the next render (or shortly after the write)
+  // each touched tab's totals are compared with the totals at its last stamp: changed -> "Balance updated",
+  // unchanged -> "Other update". Viewing, unlocking and exporting never write, so they never bump anything.
+  let stamps = null; const stampPending = new Set(); let stampTimer = 0; let stampHold = 0;
+  function stampScopes(info) {
+    const out = new Set();
+    for (const st of info.stores) {
+      if (st === 'mlitems' || st === 'mlsnaps') out.add('ml');
+      else if (st === 'mmitems') out.add('mm');
+      else if (st === 'kv') for (const k of info.keys) if (k === 'mlAccounts' || k === 'mlBank' || k === 'mlGroups') out.add('ml');
+    }
+    return out;
+  }
+  DB.onWrite(info => {
+    stampScopes(info).forEach(x => stampPending.add(x));
+    clearTimeout(stampTimer); stampTimer = setTimeout(() => { if (reconcileStamps()) renderStamps(); }, 700);
+  });
+  async function holdStamps(fn) { stampHold++; try { return await fn(); } finally { stampHold--; } }
+  function tabSig(k) { return k === 'ml' ? L.mlSig(state.ml.accounts, state.ml.items) : L.mmSig(state.mm.items); }
+  function reconcileStamps() {
+    if (!stamps || stampHold) return false;
+    const now = Date.now(); let dirty = false;
+    for (const k of ['ml', 'mm']) {
+      const fb = k === 'ml' ? L.stampFallback(state.ml.accounts, state.ml.items) : L.stampFallback([], state.mm.items);
+      const r = L.applyStamp(stamps[k], tabSig(k), stampPending.has(k), now, fb);
+      stampPending.delete(k);
+      if (r.kind) { stamps[k] = r.next; dirty = true; }
+    }
+    if (dirty) DB.setStamps(Object.assign({}, stamps)).catch(e => toast('Couldn’t save the update time: ' + (e && e.message || e)));
+    return dirty;
+  }
+  function stampText(ts) { return ts ? fullStamp(ts) : '—'; }
+  function stampLines(k) {
+    const s = (stamps && stamps[k]) || {};
+    return ['Balance updated · ยอดอัปเดต ' + stampText(s.bal), 'Other update · อัปเดตอื่นๆ ' + stampText(s.other)];
+  }
+  function renderStamps() {
+    for (const k of ['ml', 'mm']) {
+      const el = $('#' + k + '-stamps'); if (!el) continue;
+      const s = (stamps && stamps[k]) || {};
+      el.querySelector('[data-stamp="bal"]').textContent = stampText(s.bal);
+      el.querySelector('[data-stamp="other"]').textContent = stampText(s.other);
+      el.hidden = !stamps;
+    }
+  }
+
   // ---------- data ----------
   async function loadAll() {
     const [entries, start, symbol, customCats] = await Promise.all([
@@ -82,6 +129,7 @@
     state.settings = { start: start || 0, symbol: symbol || '฿', customCats: customCats || [] };
     const [mlBank, mlAccts, mlGroups, mlItems, mlSnaps] = await Promise.all([DB.getKV('mlBank', null), DB.getKV('mlAccounts', null), DB.getKV('mlGroups', []), DB.allML(), DB.allSnaps()]);
     let items = mlItems || [];
+    const hadPending = stampPending.has('ml'); // format migrations below are not user changes
     if ((mlGroups && mlGroups.length) || items.some(i => i.groupId)) { // v1.2.2: groups removed -> flatten into one entry list
       items = L.flattenML(mlGroups || [], items); await DB.putMLs(items); await DB.setKV('mlGroups', []);
     }
@@ -90,8 +138,10 @@
       accounts = [L.legacyAccount(mlBank ? mlBank.amount || 0 : 0, mlBank ? mlBank.updated : null)];
       await DB.setKV('mlAccounts', accounts); if (mlBank) await DB.setKV('mlBank', null);
     }
+    if (!hadPending) stampPending.delete('ml');
     state.ml = { bank: 0, bankUpdated: null, accounts, groups: [], items, snaps: mlSnaps || [] }; syncBank();
     state.mm = { items: (await DB.allMM()) || [] };
+    const st = await DB.getStamps(); stamps = (st && typeof st === 'object') ? Object.assign({}, st) : {};
   }
 
   // ---------- render: home ----------
@@ -236,6 +286,7 @@
   }
 
   function render() {
+    reconcileStamps(); renderStamps();
     if (state.view === 'home') renderHome();
     else if (state.view === 'summary') renderSummary();
     else if (state.view === 'moneyleft') renderMoneyLeft();
@@ -513,7 +564,7 @@
     const ml = state.ml, t = L.mlTotals(ml.accounts, ml.items), now = Date.now();
     const pend = L.sortItems(ml.items.filter(i => i.status !== 'received'));
     const rec = ml.items.filter(i => i.status === 'received').sort((a, b) => (b.receivedAt || 0) - (a.receivedAt || 0)).slice(0, 50);
-    return { theme: 'main', title: 'Main Money', subtitle: 'เงินคงเหลือ', stamp: fullStamp(now), hero: { label: 'Total · รวม', value: mlm(t.total) },
+    return { theme: 'main', title: 'Main Money', subtitle: 'เงินคงเหลือ', stamp: fullStamp(now), updated: stampLines('ml'), hero: { label: 'Total · รวม', value: mlm(t.total) },
       stats: [{ label: 'Accounts · บัญชี', value: mlm(t.bank), sub: ml.accounts.length + (ml.accounts.length === 1 ? ' account' : ' accounts') },
         { label: 'Pending · รอรับ', value: mlm(t.pending), sub: t.pendingCount + (t.pendingCount === 1 ? ' entry' : ' entries') }],
       rows: ml.accounts.map(x => ({ icon: ACCT_ICON[x.type], label: x.name, sub: acctTypeLabel(x.type) + (x.updated ? ' · updated ' + fullStamp(x.updated) : ''), value: mlm(x.balance) }))
@@ -526,7 +577,7 @@
     const items = state.mm.items, t = L.mmTotals(items), now = Date.now();
     const owed = L.sortItems(items.filter(i => i.status !== 'received'));
     const rec = items.filter(i => i.status === 'received').sort((a, b) => (b.receivedAt || 0) - (a.receivedAt || 0));
-    return { theme: 'mother', title: 'Money Mother', subtitle: 'เงินที่แม่ต้องคืน', stamp: fullStamp(now), hero: { label: 'Mom owes · แม่ค้าง', value: mlm(t.owed) },
+    return { theme: 'mother', title: 'Money Mother', subtitle: 'เงินที่แม่ต้องคืน', stamp: fullStamp(now), updated: stampLines('mm'), hero: { label: 'Mom owes · แม่ค้าง', value: mlm(t.owed) },
       stats: [{ label: 'Outstanding · ค้าง', value: mlm(t.owed), sub: t.owedCount + (t.owedCount === 1 ? ' item' : ' items') },
         { label: 'Repaid · คืนแล้ว', value: mlm(t.repaid), sub: t.repaidCount + (t.repaidCount === 1 ? ' item' : ' items') }],
       rows: [],
@@ -1063,7 +1114,7 @@
     return { app: 'my-expenses', format: 5, appVersion: APP_VERSION, exportedAt: new Date().toISOString(),
       settings: { start: state.settings.start, symbol: state.settings.symbol, customCats: state.settings.customCats }, entries,
       moneyLeft: { accounts: state.ml.accounts.map(x => Object.assign({}, x)), bank: state.ml.bank, bankUpdated: state.ml.bankUpdated, groups: [], items, snapshots: state.ml.snaps.slice().sort((a, b) => a.ts - b.ts) },
-      moneyMother: { items: mmItems } };
+      moneyMother: { items: mmItems }, lastUpdated: stamps ? JSON.parse(JSON.stringify(stamps)) : null };
   }
   async function exportBackup(mode) {
     if (!mode) mode = await dialog({ title: 'Export backup · สำรองข้อมูล', msg: 'An encrypted backup is protected by a passcode you choose (you need it to restore).',
@@ -1199,8 +1250,8 @@
       if (!mode) return;
       if (mode === 'replace' && (state.ml.items.length || state.ml.bankUpdated) &&
         !(await confirmDlg('Replace Main Money?', `Your current bank balance, ${state.ml.items.length} entries and ${state.ml.snaps.length} snapshots will be erased.`, 'Replace', true))) return;
-      await applyMoneyLeft(parsed.ml, mode === 'replace');
-      await loadAll(); resetThumbs(); toast('Main Money restored'); requestPersist(); render(); return;
+      await holdStamps(async () => { await applyMoneyLeft(parsed.ml, mode === 'replace'); await loadAll(); });
+      resetThumbs(); toast('Main Money restored'); requestPersist(); render(); return;
     }
 
     const mode = await dialog({ title: 'Restore backup?', msg: `Backup from ${when}.${mlDesc ? '\n' + mlDesc : ''}${parsed.mm ? `\nMoney Mother: ${parsed.mm.items.length} items.` : ''}${parsed.entries.length ? `\nAlso ${parsed.entries.length} older expense entries (kept, not shown).` : ''}${parsed.bad ? `\n${parsed.bad} invalid entries will be skipped.` : ''}\n\nMerge keeps your current data. Replace erases it first.`,
@@ -1216,11 +1267,14 @@
       const ids = new Set(state.settings.customCats.map(c => c.id));
       state.settings.customCats = state.settings.customCats.concat(parsed.settings.customCats.filter(c => !ids.has(c.id)));
     }
-    await DB.putEntries(parsed.entries);
-    await Promise.all([DB.setKV('start', state.settings.start), DB.setKV('symbol', state.settings.symbol), DB.setKV('customCats', state.settings.customCats)]);
-    await applyMoneyLeft(parsed.ml, mode === 'replace');
-    await applyMother(parsed.mm, mode === 'replace');
-    await loadAll(); resetThumbs();
+    await holdStamps(async () => { // restore = one change per tab: totals compared once, after everything is reloaded
+      await DB.putEntries(parsed.entries);
+      await Promise.all([DB.setKV('start', state.settings.start), DB.setKV('symbol', state.settings.symbol), DB.setKV('customCats', state.settings.customCats)]);
+      await applyMoneyLeft(parsed.ml, mode === 'replace');
+      await applyMother(parsed.mm, mode === 'replace');
+      await loadAll();
+    });
+    resetThumbs();
     toast('Backup restored');
     requestPersist();
     render();
@@ -1283,7 +1337,7 @@
     if (form) closeSheet(); if (mlform) closeMLSheet(); if (acform) closeAcctSheet(); closePeek(); if (!$('#viewer').hidden) closeViewer();
     $('#dlg').hidden = true;
     currentDEK = null; DB.setKey(null);
-    state.entries = []; state.ml = { bank: 0, bankUpdated: null, accounts: [], groups: [], items: [], snaps: [] }; state.mm = { items: [] };
+    stamps = null; stampPending.clear(); state.entries = []; state.ml = { bank: 0, bankUpdated: null, accounts: [], groups: [], items: [], snaps: [] }; state.mm = { items: [] };
     thumbURLs.forEach(v => revokeLater(v.url)); thumbURLs.clear();
     $('#ml-groups').innerHTML = ''; $('#ml-received').innerHTML = ''; $('#ml-snaps').innerHTML = ''; $('#ml-accts').innerHTML = ''; $('#mm-list').innerHTML = ''; $('#mm-received').innerHTML = ''; $('#list').innerHTML = '';
     showLock(true);
@@ -1524,6 +1578,6 @@
   }
 
   // exposed for automated tests only
-  window.__app = { get lastExport() { return lastExport; }, exportReport, state, processPhoto, parseBackup, buildBackup, importBackup, render, mlCurrentText, lockNow, DB: () => DB };
+  window.__app = { get lastExport() { return lastExport; }, exportReport, state, processPhoto, parseBackup, buildBackup, importBackup, render, mlCurrentText, lockNow, DB: () => DB, get stamps() { return stamps; }, reconcileStamps };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 })();

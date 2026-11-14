@@ -47,7 +47,7 @@
     return new Promise(res => { const u = URL.createObjectURL(blob); const im = new Image(); im.onload = () => { res(im); setTimeout(() => URL.revokeObjectURL(u), 1000); }; im.onerror = () => { URL.revokeObjectURL(u); res(null); }; im.src = u; });
   }
 
-  // model: { theme, title, subtitle, stamp, hero: {label, value}, stats: [{label, value, sub}], rows: [{icon,label,sub,value}], sections: [{title, cards:[{name, amount, when, tag, note, badge, badgeColor, img, muted}]}], footer }
+  // model: { theme, title, subtitle, stamp, updated: [line, …], hero: {label, value}, stats: [{label, value, sub}], rows: [{icon,label,sub,value}], sections: [{title, cards:[{name, amount, when, tag, note, badge, badgeColor, img, muted}]}], footer }
   function paint(ctx, m, draw) {
     const th = THEMES[m.theme] || THEMES.main; let y = PAD;
     if (draw) { ctx.fillStyle = '#F4F5FA'; ctx.fillRect(0, 0, W, 1e6); }
@@ -55,7 +55,8 @@
     const hx = PAD, hw = W - PAD * 2, inner = hw - 40;
     ctx.font = f(700, 15); const rowsH = (m.rows || []).length ? 14 + m.rows.length * 46 + 8 : 0;
     const statsH = (m.stats || []).length ? 86 : 0;
-    const hh = 24 + 22 + 20 + 22 + 50 + 12 + statsH + rowsH + 18;
+    const upd = (m.updated || []).filter(Boolean), updH = upd.length * 18; // v1.6.2: last-updated lines
+    const hh = 24 + 22 + 20 + 22 + 50 + 12 + updH + statsH + rowsH + 18;
     if (draw) {
       const g = ctx.createLinearGradient(hx, y, hx + hw, y + hh); g.addColorStop(0, th.g[0]); g.addColorStop(0.55, th.g[1]); g.addColorStop(1, th.g[2]);
       ctx.save(); ctx.shadowColor = 'rgba(0,0,0,.18)'; ctx.shadowBlur = 24; ctx.shadowOffsetY = 8; rr(ctx, hx, y, hw, hh, 26); ctx.fillStyle = g; ctx.fill(); ctx.restore();
@@ -67,8 +68,10 @@
     if (draw) {
       ctx.fillStyle = '#fff'; ctx.textBaseline = 'alphabetic'; ctx.font = f(800, 22); ctx.fillText(m.title, cx, cy);
       ctx.font = f(500, 13); ctx.fillStyle = 'rgba(255,255,255,.8)'; ctx.fillText(m.subtitle + '  ·  ' + m.stamp, cx, cy + 20);
+      ctx.font = f(600, 12); ctx.fillStyle = 'rgba(255,255,255,.92)';
+      upd.forEach((t, i) => ctx.fillText(fit(ctx, t, inner), cx, cy + 20 + 18 * (i + 1)));
     }
-    cy += 20 + 34;
+    cy += 20 + 34 + updH;
     if (draw) { ctx.font = f(600, 14); ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.fillText(m.hero.label, cx, cy); ctx.font = f(800, 42); ctx.fillStyle = '#fff'; ctx.fillText(m.hero.value, cx, cy + 46); }
     cy += 46 + 16;
     if (statsH) {
@@ -199,5 +202,5 @@
     }
     return { pages: out, blob: out[0].blob, width: out[0].width, height: out.reduce((s, p) => s + p.height, 0) };
   }
-  root.Report = { VERSION: '1.6.1', render, wrap, planPages, THEMES };
+  root.Report = { VERSION: '1.6.2', render, wrap, planPages, THEMES };
 })(self);

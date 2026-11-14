@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="app-version" content="1.6.1">
+<meta name="app-version" content="1.6.2">
 <title>My Expenses</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -66,6 +66,7 @@
   <!-- MONEY LEFT -->
   <section class="view active" id="view-moneyleft" aria-label="Main Money">
     <header class="largetitle">
+      <div class="stamps" id="ml-stamps" hidden><span class="stamp-l">Balance updated · ยอดอัปเดต <b data-stamp="bal">—</b></span><span class="stamp-l">Other update · อัปเดตอื่นๆ <b data-stamp="other">—</b></span></div>
       <div class="titlerow">
         <div><h1>Main Money</h1><div class="subtitle">เงินคงเหลือ</div></div>
         <button class="iconbtn" id="ml-copy-top" aria-label="Copy as text"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg></button>
@@ -113,6 +114,7 @@
   <!-- MONEY MOTHER (v1.6.0) -->
   <section class="view" id="view-mother" aria-label="Money Mother">
     <header class="largetitle">
+      <div class="stamps" id="mm-stamps" hidden><span class="stamp-l">Balance updated · ยอดอัปเดต <b data-stamp="bal">—</b></span><span class="stamp-l">Other update · อัปเดตอื่นๆ <b data-stamp="other">—</b></span></div>
       <div class="titlerow">
         <div><h1>Money Mother</h1><div class="subtitle">เงินที่แม่ต้องคืน</div></div>
         <button class="iconbtn" id="mm-copy-top" aria-label="Copy as text"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg></button>

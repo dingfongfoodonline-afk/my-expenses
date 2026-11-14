@@ -9,6 +9,11 @@
   let dbp = null;
   let dek = null;       // data key in memory only while unlocked
   let encOn = false;    // encryption enabled (meta present)
+  // v1.6.2: every data write (put/delete/clear) goes through write(), which notifies listeners after commit.
+  // The app then compares each tab's totals with the stored ones and bumps that tab's "last updated" time only
+  // when a total changed. The stamps live in kv 'lastUpdated' (encrypted like other data, included in backups).
+  const STAMP_KEY = 'lastUpdated';
+  const listeners = new Set();
 
   function open() {
     if (dbp) return dbp;
@@ -53,8 +58,20 @@
     if (!dek) throw locked();
     return Vault.decryptRecord(dek, rec, STORES[store]);
   }
+  async function write(stores, fn, keys) {
+    const r = await tx(stores, 'readwrite', fn);
+    const info = { stores: [].concat(stores), keys: keys || [] };
+    for (const cb of listeners) { try { cb(info); } catch (_) {} }
+    return r;
+  }
   async function getAll(store) { const raw = await tx(store, 'readonly', s => reqP(s.getAll())); const out = []; for (const r of raw || []) out.push(await open_(store, r)); return out; }
-  async function putMany(store, list) { const sealed = []; for (const r of list) sealed.push(await seal(store, r)); return tx(store, 'readwrite', s => { for (const r of sealed) s.put(r); }); }
+  async function putMany(store, list) {
+    const sealed = []; for (const r of list) sealed.push(await seal(store, r));
+    if (!list.length) return;
+    return write(store, s => { for (const r of sealed) s.put(r); }, store === 'kv' ? list.map(r => r.key) : null);
+  }
+  function del(store, id) { return write(store, s => { s.delete(id); }); }
+  function clr(stores) { stores = [].concat(stores); return write(stores, get => { for (const st of stores) get(st).clear(); }); }
 
   const DB = {
     open,
@@ -62,6 +79,10 @@
     isEncrypted: () => encOn,
     isUnlocked: () => !encOn || !!dek,
     setKey(k) { dek = k || null; },
+    // ---- last updated (v1.6.2) ----
+    onWrite(cb) { listeners.add(cb); return () => listeners.delete(cb); },
+    getStamps() { return DB.getKV(STAMP_KEY, null); },
+    async setStamps(v) { const rec = await seal('kv', { key: STAMP_KEY, value: v }); return tx('kv', 'readwrite', s => { s.put(rec); }); }, // no listener: not a data change
     async loadCryptoMeta() { const r = await tx('kv', 'readonly', s => reqP(s.get('crypto'))); encOn = !!(r && r.value); return r ? r.value : null; },
     async setCryptoMeta(meta) { await tx('kv', 'readwrite', s => { if (meta) s.put({ key: 'crypto', value: meta }); else s.delete('crypto'); }); encOn = !!meta; },
     // Re-write every record encrypted (newKey) or plaintext (null) in ONE transaction across all stores.
@@ -90,8 +111,8 @@
     allEntries() { return getAll('entries'); },
     async putEntry(e) { return putMany('entries', [e]); },
     putEntries(list) { return putMany('entries', list); },
-    deleteEntry(id) { return tx('entries', 'readwrite', s => { s.delete(id); }); },
-    clearEntries() { return tx('entries', 'readwrite', s => { s.clear(); }); },
+    deleteEntry(id) { return del('entries', id); },
+    clearEntries() { return clr('entries'); },
     async getKV(key, dflt) {
       const r = await tx('kv', 'readonly', s => reqP(s.get(key)));
       if (!r) return dflt;
@@ -101,17 +122,17 @@
     allML() { return getAll('mlitems'); },
     putML(i) { return putMany('mlitems', [i]); },
     putMLs(list) { return putMany('mlitems', list); },
-    deleteML(id) { return tx('mlitems', 'readwrite', s => { s.delete(id); }); },
-    clearML() { return Promise.all([tx('mlitems', 'readwrite', s => { s.clear(); }), tx('mlsnaps', 'readwrite', s => { s.clear(); })]); },
+    deleteML(id) { return del('mlitems', id); },
+    clearML() { return clr(['mlitems', 'mlsnaps']); },
     allSnaps() { return getAll('mlsnaps'); },
     putSnap(x) { return putMany('mlsnaps', [x]); },
     putSnaps(list) { return putMany('mlsnaps', list); },
-    deleteSnap(id) { return tx('mlsnaps', 'readwrite', s => { s.delete(id); }); },
+    deleteSnap(id) { return del('mlsnaps', id); },
     allMM() { return getAll('mmitems'); },
     putMM(i) { return putMany('mmitems', [i]); },
     putMMs(list) { return putMany('mmitems', list); },
-    deleteMM(id) { return tx('mmitems', 'readwrite', s => { s.delete(id); }); },
-    clearMM() { return tx('mmitems', 'readwrite', s => { s.clear(); }); },
+    deleteMM(id) { return del('mmitems', id); },
+    clearMM() { return clr('mmitems'); },
     async clearAll() { await Promise.all(Object.keys(STORES).map(n => tx(n, 'readwrite', s => { s.clear(); }))); encOn = false; dek = null; }
   };
   root.DB = DB;

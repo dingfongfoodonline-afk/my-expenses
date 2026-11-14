@@ -249,7 +249,31 @@
     lines.push('', 'รวมแม่ค้าง ' + fmtPlain(mmTotals(items).owed));
     return lines.join('\n');
   }
-  const api = { mmTotals, mmText, parseBaht, parseKBankSMS, parseBalanceText, MAIN_ACCOUNT_ID, sortAccounts, acctTotal, legacyAccount, normAccounts, sortGroups, sortItems, flattenML, mlTotals, fmtPlain, mlText, EXPENSE_CATS, INCOME_CATS, PALETTE, allCategories, findCategory, toCents, fmtMoney, dayKey, monthKey, monthLabel,
+  // ---------- last updated (v1.6.2) ----------
+  // Two times per tab: "bal" bumps when a total changes, "other" for any other data change on that tab.
+  // The signature covers every total shown: Main Money = per-account balances (non-zero), bank, pending, received;
+  // Money Mother = owed and repaid.
+  function mlSig(accounts, items) {
+    const t = mlTotals(accounts, items);
+    const ac = (accounts || []).filter(a => a.balance).map(a => a.id + ':' + a.balance).sort();
+    return [t.bank, t.pending, t.received].join('|') + '#' + ac.join(',');
+  }
+  function mmSig(items) { const t = mmTotals(items); return t.owed + '|' + t.repaid; }
+  // Older data without stored times: balance time = newest account/entry timestamp, other = newest edit if later.
+  function stampFallback(accounts, items) {
+    let bal = 0, other = 0;
+    for (const a of accounts || []) bal = Math.max(bal, Number(a.updated) || 0, Number(a.created) || 0);
+    for (const i of items || []) { bal = Math.max(bal, Number(i.created) || 0, Number(i.receivedAt) || 0); other = Math.max(other, Number(i.updated) || 0); }
+    return { bal: bal || null, other: other > bal ? other : null };
+  }
+  // prev: {bal, other, sig} | null; touched: a data write hit this tab since the last check.
+  function applyStamp(prev, sig, touched, now, fallback) {
+    if (!prev || prev.sig == null) { const fb = fallback || {}; return { next: { bal: fb.bal || null, other: fb.other || null, sig }, kind: 'init' }; }
+    if (sig !== prev.sig) return { next: Object.assign({}, prev, { bal: now, sig }), kind: 'bal' };
+    if (touched) return { next: Object.assign({}, prev, { other: now }), kind: 'other' };
+    return { next: prev, kind: null };
+  }
+  const api = { mlSig, mmSig, stampFallback, applyStamp, mmTotals, mmText, parseBaht, parseKBankSMS, parseBalanceText, MAIN_ACCOUNT_ID, sortAccounts, acctTotal, legacyAccount, normAccounts, sortGroups, sortItems, flattenML, mlTotals, fmtPlain, mlText, EXPENSE_CATS, INCOME_CATS, PALETTE, allCategories, findCategory, toCents, fmtMoney, dayKey, monthKey, monthLabel,
     addMonths, daysInMonth, dayLabel, toLocalInputs, fromLocalInputs, totals, filterEntries, sortNewest, groupByDay,
     monthSummary, monthsWithData, validateEntry, uid, slug };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Logic = api;
