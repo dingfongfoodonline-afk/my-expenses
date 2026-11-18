@@ -4,7 +4,7 @@
   const L = window.Logic;
   const $ = (s, el) => (el || document).querySelector(s);
   const $$ = (s, el) => Array.from((el || document).querySelectorAll(s));
-  const APP_VERSION = '1.6.3';
+  const APP_VERSION = '1.6.4';
 
   const state = {
     entries: [],
@@ -1335,6 +1335,9 @@
 
   // ---------- Security: encryption + lock ----------
   let cryptoMeta = null; let currentDEK = null; let hiddenAt = 0;
+  // v1.6.4 App lock. ON = data key only in memory after Face ID/passcode. OFF (with a passcode set) = records stay
+  // encrypted, but the data key is kept on this device (kv 'dekOpen') so the app opens without the lock screen.
+  let lockOpen = false;
   function passDialog(o) {
     return new Promise(resolve => {
       const box = document.createElement('div');
@@ -1386,7 +1389,7 @@
     finally { btn.disabled = false; }
   }
   function lockNow() {
-    if (!DB.isEncrypted()) return;
+    if (!DB.isEncrypted() || lockOpen) return;
     if (form) closeSheet(); if (mlform) closeMLSheet(); if (acform) closeAcctSheet(); closePeek(); if (!$('#viewer').hidden) closeViewer();
     $('#dlg').hidden = true;
     currentDEK = null; DB.setKey(null);
@@ -1423,21 +1426,11 @@
       console.error(e); DB.setKey(null); await DB.setCryptoMeta(null);
       await dialog({ title: 'Encryption failed', msg: 'Nothing was changed. ' + (e && e.message || e) }); return;
     }
-    cryptoMeta = meta; currentDEK = dek;
+    cryptoMeta = meta; currentDEK = dek; lockOpen = false; await DB.setOpenKey(null);
     await loadAll(); render();
     const exp = await dialog({ title: '🔐 Encrypted', msg: 'Your data is now encrypted on this phone.\n\nStrongly recommended: export an encrypted backup now and save it to Files / iCloud Drive.',
       buttons: [{ label: 'Export encrypted backup', value: true, bold: true }, { label: 'Later', value: false }] });
     if (exp) exportBackup('enc');
-  }
-  async function verifyUnlock(title) {
-    const hasFace = !!(cryptoMeta && cryptoMeta.prf);
-    let how = 'pass';
-    if (hasFace) { how = await dialog({ title, msg: 'Confirm it’s you.', buttons: [{ label: 'Use Face ID', value: 'face', bold: true }, { label: 'Use passcode', value: 'pass' }, { label: 'Cancel', value: null }] }); if (!how) return null; }
-    try {
-      if (how === 'face') return await Vault.unwrapWithFaceID(cryptoMeta.prf);
-      const p = await passDialog({ title, msg: 'Enter your passcode.', ok: 'Confirm' }); if (!p) return null;
-      return await Vault.unwrapWithPasscode(cryptoMeta.passcode, p);
-    } catch (e) { await dialog({ title: 'Not confirmed', msg: e && e.code === 'BADKEY' ? 'Wrong passcode.' : String(e && e.message || e) }); return null; }
   }
   async function changePasscode() {
     const r = await passDialog({ title: 'Change passcode', current: true, confirm: true, ok: 'Change' }); if (!r) return;
@@ -1454,34 +1447,74 @@
     }
     renderSettings();
   }
-  async function disableEncryption() {
-    const ok = await confirmDlg('Turn off encryption?', 'Your data will be stored unencrypted on this phone again.', 'Continue', true); if (!ok) return;
-    const dek = await verifyUnlock('Turn off encryption'); if (!dek) return;
-    toast('Decrypting…');
-    try { await DB.rewriteAll(null); await DB.setCryptoMeta(null); DB.setKey(null); cryptoMeta = null; currentDEK = null; }
-    catch (e) { await dialog({ title: 'Failed', msg: String(e && e.message || e) }); return; }
-    await loadAll(); render(); toast('Encryption turned off');
+  // Turning the lock OFF needs the passcode (Face ID alone is not enough).
+  async function lockOff() {
+    const p = await passDialog({ title: 'Turn off App lock? · ปิดล็อกแอป', msg: 'Enter your passcode to turn the lock off.\n⚠️ Anyone with this phone will then be able to open the app.', ok: 'Turn off' });
+    if (!p) return;
+    let dek;
+    try { dek = await Vault.unwrapWithPasscode(cryptoMeta.passcode, p); }
+    catch (e) { await dialog({ title: 'Wrong passcode · รหัสไม่ถูกต้อง', msg: 'The lock stays on.' }); return; }
+    await DB.setOpenKey(await Vault.exportRawKey(dek));
+    currentDEK = dek; DB.setKey(dek); lockOpen = true;
+    renderSettings(); toast('App lock off · opens without passcode');
+  }
+  // Turning it back ON with an existing passcode: confirm the passcode (so nobody locks themselves out), then drop the stored key.
+  async function lockOnAgain() {
+    const p = await passDialog({ title: 'Turn on App lock · เปิดล็อกแอป', msg: 'Enter your passcode to turn the lock back on.', ok: 'Turn on' });
+    if (!p) return;
+    try { await Vault.unwrapWithPasscode(cryptoMeta.passcode, p); }
+    catch (e) {
+      const a = await dialog({ title: 'Wrong passcode · รหัสไม่ถูกต้อง', msg: 'The lock is still off. If you forgot it, set a new passcode now (the app is open, so your data is safe).',
+        buttons: [{ label: 'Set a new passcode', value: 'new', bold: true }, { label: 'Cancel', value: null }] });
+      if (a !== 'new') return;
+      const np = await passDialog({ title: 'Set a new passcode', msg: 'Min 6 characters. You need it to unlock and to turn the lock off.', confirm: true }); if (!np) return;
+      cryptoMeta = Object.assign({}, cryptoMeta, { passcode: await Vault.wrapWithPasscode(currentDEK, np) }); await DB.setCryptoMeta(cryptoMeta);
+    }
+    if (!cryptoMeta.prf && !cryptoMeta.prfUnsupported && (await Vault.platformAvailable())) {
+      const useFace = await dialog({ title: 'Unlock with Face ID?', msg: 'Face ID derives a key on this device to unlock your data.', buttons: [{ label: 'Use Face ID', value: true, bold: true }, { label: 'Passcode only', value: false }] });
+      if (useFace) {
+        try { cryptoMeta = Object.assign({}, cryptoMeta, { prf: await Vault.enrollFaceID(currentDEK) }); }
+        catch (e) { if (e && e.code === 'NOPRF') cryptoMeta = Object.assign({}, cryptoMeta, { prfUnsupported: true }); else toast('Face ID skipped'); }
+        await DB.setCryptoMeta(cryptoMeta);
+      }
+    }
+    await DB.setOpenKey(null); lockOpen = false;
+    renderSettings(); toast('App lock on 🔐');
+  }
+  let lockBusy = false;
+  async function toggleLock() {
+    if (lockBusy) return; lockBusy = true; $('#lock-toggle').disabled = true;
+    try {
+      if (!DB.isEncrypted()) await encryptSetup();     // no passcode yet: set one (twice), optional Face ID, encrypt
+      else if (lockOpen) await lockOnAgain();
+      else await lockOff();
+    } catch (e) { dialog({ title: 'Error', msg: String(e && e.message || e) }); }
+    finally { lockBusy = false; $('#lock-toggle').disabled = false; renderSettings(); }
   }
   function renderSecurity() {
-    const on = DB.isEncrypted();
-    $('#sec-off').hidden = on; $('#sec-on').hidden = !on;
-    if (on) $('#sec-face').textContent = cryptoMeta && cryptoMeta.prf ? 'On ✓' : (cryptoMeta && cryptoMeta.prfUnsupported ? 'Not supported' : 'Off');
+    const enc = DB.isEncrypted(), on = enc && !lockOpen;
+    const t = $('#lock-toggle'); t.setAttribute('aria-checked', on ? 'true' : 'false');
+    $('#lock-sub').textContent = on ? 'On · Face ID or passcode to open' : (enc ? 'Off · passcode kept, needed to change this' : 'Off');
+    $('#lock-off-warn').hidden = !(enc && lockOpen);
+    $('#sec-on').hidden = !enc; $('#btn-lock-now').hidden = !on;
+    $('#sec-enc').textContent = on ? 'On · AES-256' : 'Data encrypted · key kept on this phone';
+    if (enc) $('#sec-face').textContent = cryptoMeta && cryptoMeta.prf ? 'On ✓' : (cryptoMeta && cryptoMeta.prfUnsupported ? 'Not supported' : 'Off');
     $('#btn-face-enroll .row-l').textContent = cryptoMeta && cryptoMeta.prf ? 'Set up Face ID again' : 'Set up Face ID';
     $('#sec-note').textContent = on ? 'Data and photos are encrypted with AES-256-GCM. The key is only in memory while unlocked; the app locks after 60 s in the background. Forgetting the passcode and losing Face ID = data unrecoverable.'
-      : 'Optional. Encrypts all data and photos on this phone; unlock with Face ID or a passcode.';
+      : enc ? 'Turning the lock off or on needs your passcode (Face ID is not enough).'
+      : 'Turn on to set a passcode (and optionally Face ID). Your data and photos are then encrypted on this phone.';
   }
   function bindSecurity() {
-    $('#btn-encrypt').addEventListener('click', () => encryptSetup().catch(e => dialog({ title: 'Error', msg: String(e && e.message || e) })));
+    $('#lock-toggle').addEventListener('click', toggleLock);
     $('#btn-lock-now').addEventListener('click', lockNow);
     $('#btn-change-pass').addEventListener('click', () => changePasscode().catch(e => dialog({ title: 'Error', msg: String(e && e.message || e) })));
     $('#btn-face-enroll').addEventListener('click', () => reenrollFace().catch(e => dialog({ title: 'Error', msg: String(e && e.message || e) })));
-    $('#btn-decrypt').addEventListener('click', () => disableEncryption().catch(e => dialog({ title: 'Error', msg: String(e && e.message || e) })));
     $('#lock-face').addEventListener('click', () => tryFaceUnlock(false));
     $('#lock-usepass').addEventListener('click', () => { $('#lock-passform').hidden = false; $('#lock-usepass').hidden = true; $('#lock-pass').focus(); });
     $('#lock-passform').addEventListener('submit', passUnlock);
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) { hiddenAt = Date.now(); return; }
-      if (DB.isEncrypted() && DB.isUnlocked() && hiddenAt && Date.now() - hiddenAt > 60000) lockNow();
+      if (DB.isEncrypted() && !lockOpen && DB.isUnlocked() && hiddenAt && Date.now() - hiddenAt > 60000) lockNow();
       hiddenAt = 0;
     });
   }
@@ -1570,7 +1603,7 @@
     $('#btn-wipe').addEventListener('click', async () => {
       if (!(await confirmDlg('Erase all data?', 'Your bank balance, entries, photos, snapshots and settings on this device will be deleted. Export a backup first if you might need it.', 'Erase', true))) return;
       if (!(await confirmDlg('Are you sure?', 'This cannot be undone.', 'Erase everything', true))) return;
-      await DB.clearAll(); cryptoMeta = null; currentDEK = null; thumbURLs.forEach(v => revokeLater(v.url)); thumbURLs.clear();
+      await DB.clearAll(); cryptoMeta = null; currentDEK = null; lockOpen = false; thumbURLs.forEach(v => revokeLater(v.url)); thumbURLs.clear();
       await loadAll(); state.filter = { month: 'all', category: 'all', query: '' }; toast('All data erased'); render();
     });
     // install hint
@@ -1608,7 +1641,12 @@
     if (!(await checkVersions())) return;
     bind(); bindSecurity();
     try { cryptoMeta = await DB.loadCryptoMeta(); } catch (e) { console.error(e); }
-    if (cryptoMeta) { showLock(true); }
+    let openKey = null;
+    if (cryptoMeta) { try { const raw = await DB.getOpenKey(); if (raw) openKey = await Vault.importRawKey(raw); } catch (e) { console.error(e); openKey = null; } }
+    if (cryptoMeta && openKey) { // App lock is off: open straight away with the stored key
+      lockOpen = true;
+      try { await unlockWith(openKey); } catch (e) { console.error(e); lockOpen = false; currentDEK = null; DB.setKey(null); showLock(true); }
+    } else if (cryptoMeta) { showLock(true); }
     else try { await loadAll(); }
     catch (e) { console.error(e); await dialog({ title: 'Storage unavailable', msg: 'This browser blocked local storage (Private Browsing?). Open the app normally in Safari to save entries.\n\n' + (e && e.message || e) }); }
     if (!cryptoMeta) { render(); processPendingSMS(); }
@@ -1618,7 +1656,7 @@
       const hadController = !!navigator.serviceWorker.controller;
       navigator.serviceWorker.register('sw.js').then(reg => {
         // home-screen apps resume without navigating, so ask for updates when the app comes back
-        document.addEventListener('visibilitychange', () => { if (!document.hidden) reg.update().catch(() => {}); });
+        document.addEventListener('visibilitychange', () => { if (!document.hidden && reg) reg.update().catch(() => {}); });
       }).catch(e => console.warn('SW registration failed', e));
       // a new version took over: reload so every file is from the same version (wait if a sheet/dialog is open)
       navigator.serviceWorker.addEventListener('controllerchange', () => {

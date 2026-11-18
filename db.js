@@ -5,7 +5,7 @@
   const DB_NAME = 'my-expenses';
   const DB_VER = 3; // v3 (app 1.6.0): + mmitems (Money Mother)
   const STORES = { entries: 'id', kv: 'key', mlitems: 'id', mlsnaps: 'id', mmitems: 'id' };
-  const PLAIN_KV = new Set(['crypto', 'hintDismissed', 'lastBackup']); // never secret, readable while locked
+  const PLAIN_KV = new Set(['crypto', 'hintDismissed', 'lastBackup', 'dekOpen']); // dekOpen: v1.6.4 data key while App lock is OFF // never secret, readable while locked
   let dbp = null;
   let dek = null;       // data key in memory only while unlocked
   let encOn = false;    // encryption enabled (meta present)
@@ -85,6 +85,8 @@
     getStamps() { return DB.getKV(STAMP_KEY, null); },
     async setStamps(v) { const rec = await seal('kv', { key: STAMP_KEY, value: v }); return tx('kv', 'readwrite', s => { s.put(rec); }); }, // no listener: not a data change
     async loadCryptoMeta() { const r = await tx('kv', 'readonly', s => reqP(s.get('crypto'))); encOn = !!(r && r.value); return r ? r.value : null; },
+    async getOpenKey() { const r = await tx('kv', 'readonly', s => reqP(s.get('dekOpen'))); return r && typeof r.value === 'string' ? r.value : null; },
+    async setOpenKey(v) { await tx('kv', 'readwrite', s => { if (v) s.put({ key: 'dekOpen', value: v }); else s.delete('dekOpen'); }); },
     async setCryptoMeta(meta) { await tx('kv', 'readwrite', s => { if (meta) s.put({ key: 'crypto', value: meta }); else s.delete('crypto'); }); encOn = !!meta; },
     // Re-write every record encrypted (newKey) or plaintext (null) in ONE transaction across all stores.
     async rewriteAll(newKey) {

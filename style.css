@@ -422,3 +422,14 @@ body.locked #app, body.locked .tabbar, body.locked .fab { visibility: hidden; }
 .pm-x { position: absolute; top: 3px; right: 3px; width: 22px; height: 22px; border-radius: 50%; background: rgba(0,0,0,.55); color: #fff; font-size: 15px; line-height: 22px; text-align: center; }
 .pm-add { display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--accent); border: 2px dashed var(--fill2); background: transparent; cursor: pointer; }
 .pm-add span { font-size: 24px; line-height: 1; } .pm-add small { font-size: 11px; }
+/* v1.6.4: App lock switch */
+.switchrow { cursor: pointer; }
+.switchrow .row-l small { display: block; font-size: 13px; color: var(--text2); margin-top: 1px; }
+.sw { flex: 0 0 51px; width: 51px; height: 31px; border-radius: 16px; background: var(--fill2); position: relative; transition: background .2s; }
+.sw i { position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #fff; box-shadow: 0 2px 6px rgba(0,0,0,.25); transition: transform .2s; }
+.switchrow[aria-checked="true"] .sw { background: var(--green, #34C759); }
+.switchrow[aria-checked="true"] .sw i { transform: translateX(20px); }
+.switchrow:disabled { opacity: .6; }
+.lockwarn { font-size: 14px; color: #B45309; min-height: 40px; }
+@media (prefers-color-scheme: dark) { .lockwarn { color: var(--orange); } }
+.lockwarn[hidden] { display: none; }

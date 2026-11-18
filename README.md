@@ -64,3 +64,10 @@ Files: index.html, style.css, logic.js (pure logic), db.js (IndexedDB), app.js (
 - The list row shows `📷 4` when an item has 4 photos. Export reports draw every photo in full (receipts are never cropped), with one extra photo card per additional photo.
 - Extra photos are encrypted like the main photo and included in backups (`morePhotos`).
 - A backup file marked `"partial": ["moneyMother"]` is a Money Mother-only file. Settings → Import shows **Add to Money Mother?** with Add and Cancel only (no Replace). It adds or updates those items by id, so importing the same file twice does not duplicate them, and it never changes Main Money.
+
+## App lock toggle (v1.6.4)
+- Settings → Security has one **App lock · ล็อกแอป** switch.
+- **Turning it on** the first time asks you to set a passcode (typed twice), then offers Face ID. Your data and photos are then encrypted (AES-256-GCM).
+- **Turning it off** needs your current passcode. Face ID alone is not enough. After that the app opens with no unlock screen, and Settings shows: "⚠️ Lock is off: anyone with this phone can open the app."
+- **How lock-off storage works:** records and photos stay encrypted on the phone. The data key is kept on the phone (kv `dekOpen`) so the app can open without asking. In practice that is as open as plain storage, which is why the warning is shown. Your passcode and Face ID set-ups are kept, so turning the lock back on only asks for your passcode and then deletes the stored key. Nothing is re-encrypted, so there is no migration risk. If you forgot the passcode while the lock is off, you can set a new one at that point.
+- If you had the lock on before v1.6.4, it stays on. Nothing to migrate, and no data changes.

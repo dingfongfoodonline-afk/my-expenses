@@ -115,6 +115,9 @@
     catch (_) { const e = new Error('Wrong passcode for this backup'); e.code = 'BADKEY'; throw e; }
   }
 
-  root.Vault = { PBKDF2_ITER, available: !!C, genDEK, wrapWithPasscode, unwrapWithPasscode, webauthnAvailable, platformAvailable, enrollFaceID, unwrapWithFaceID,
+  // v1.6.4 "App lock off": the data key is kept on this device (records stay AES-GCM encrypted at rest).
+  async function exportRawKey(dek) { return b64(await C.exportKey('raw', dek)); }
+  function importRawKey(s) { return C.importKey('raw', unb64(s), { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']); }
+  root.Vault = { PBKDF2_ITER, available: !!C, genDEK, exportRawKey, importRawKey, wrapWithPasscode, unwrapWithPasscode, webauthnAvailable, platformAvailable, enrollFaceID, unwrapWithFaceID,
     encryptRecord, decryptRecord, encryptBackup, decryptBackup, b64, unb64 };
 })(self);

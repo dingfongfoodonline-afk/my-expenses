@@ -217,5 +217,5 @@
     }
     return { pages: out, blob: out[0].blob, width: out[0].width, height: out.reduce((s, p) => s + p.height, 0) };
   }
-  root.Report = { VERSION: '1.6.3', render, wrap, planPages, THEMES };
+  root.Report = { VERSION: '1.6.4', render, wrap, planPages, THEMES };
 })(self);
