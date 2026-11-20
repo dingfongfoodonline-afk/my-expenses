@@ -2,9 +2,9 @@
    v1.6.1: every file comes from ONE versioned cache, so a new index.html can never run with an old app.js.
    Install fetches straight from the network (bypassing the HTTP cache), checks that the files carry this version,
    and fails on a half-finished deploy so the previous version keeps working until the next try. */
-const VERSION = '1.6.4';
+const VERSION = '1.7.1';
 const CACHE = 'my-expenses-v' + VERSION;
-const ASSETS = ['./', './index.html', './style.css', './logic.js', './vault.js', './db.js', './export.js', './app.js', './manifest.json',
+const ASSETS = ['./', './index.html', './style.css', './logic.js', './vault.js', './db.js', './export.js', './drive.js', './app.js', './manifest.json',
   './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png', './icons/apple-touch-icon.png'];
 const MUST_MATCH = { './index.html': 'content="' + VERSION + '"', './app.js': "APP_VERSION = '" + VERSION + "'", './export.js': "VERSION: '" + VERSION + "'" };
 

@@ -118,6 +118,19 @@
   // v1.6.4 "App lock off": the data key is kept on this device (records stay AES-GCM encrypted at rest).
   async function exportRawKey(dek) { return b64(await C.exportKey('raw', dek)); }
   function importRawKey(s) { return C.importKey('raw', unb64(s), { name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']); }
+  // v1.7.0 Drive backup: derive the backup key ONCE from the passcode (PBKDF2, 600k) and keep it, so each automatic
+  // upload is fast. The file is the same 'enc1' format as an encrypted export: decryptBackup(file, passcode) opens it.
+  async function deriveBackupKey(passcode, saltB64, iter) {
+    const salt = saltB64 ? unb64(saltB64) : rand(16); iter = iter || PBKDF2_ITER;
+    const base = await C.importKey('raw', te.encode(passcode), 'PBKDF2', false, ['deriveBits']);
+    const bits = await C.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: iter }, base, 256);
+    return { raw: b64(bits), salt: b64(salt), iter };
+  }
+  async function encryptBackupWithKey(bk, text) {
+    const key = await C.importKey('raw', unb64(bk.raw), { name: 'AES-GCM', length: 256 }, false, ['encrypt']);
+    const { iv, ct } = await encBytes(key, te.encode(text));
+    return { app: 'my-expenses', encrypted: true, format: 'enc1', cipher: 'AES-256-GCM', kdf: { name: 'PBKDF2-SHA256', iter: bk.iter, salt: bk.salt }, iv: b64(iv), ct: b64(ct) };
+  }
   root.Vault = { PBKDF2_ITER, available: !!C, genDEK, exportRawKey, importRawKey, wrapWithPasscode, unwrapWithPasscode, webauthnAvailable, platformAvailable, enrollFaceID, unwrapWithFaceID,
-    encryptRecord, decryptRecord, encryptBackup, decryptBackup, b64, unb64 };
+    encryptRecord, decryptRecord, encryptBackup, decryptBackup, deriveBackupKey, encryptBackupWithKey, b64, unb64 };
 })(self);

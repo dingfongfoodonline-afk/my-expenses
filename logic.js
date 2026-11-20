@@ -273,7 +273,61 @@
     if (touched) return { next: Object.assign({}, prev, { other: now }), kind: 'other' };
     return { next: prev, kind: null };
   }
-  const api = { mlSig, mmSig, stampFallback, applyStamp, mmTotals, mmText, parseBaht, parseKBankSMS, parseBalanceText, MAIN_ACCOUNT_ID, sortAccounts, acctTotal, legacyAccount, normAccounts, sortGroups, sortItems, flattenML, mlTotals, fmtPlain, mlText, EXPENSE_CATS, INCOME_CATS, PALETTE, allCategories, findCategory, toCents, fmtMoney, dayKey, monthKey, monthLabel,
+  // ---------- balance + pending history (v1.7.1) ----------
+  // A row is logged whenever an account balance or the Main Money "Pending · รอรับ" total changes.
+  // row = { id, ts, kind: 'acct'|'pending', acct (account id or 'pending'), name, old (null = new), new (null = removed), change, cause }
+  function histSnapshot(accounts, items) {
+    const acct = {};
+    for (const a of accounts || []) acct[a.id] = { name: a.name, bal: a.balance || 0 };
+    return { acct, pending: mlTotals([], items).pending };
+  }
+  let histN = 0;
+  function histId(ts) { return 'h-' + ts.toString(36) + '-' + (histN++).toString(36) + Math.random().toString(36).slice(2, 6); }
+  function histDiff(prev, next, ts, cause) {
+    const rows = []; if (!prev || !next) return rows;
+    const ids = new Set([...Object.keys(prev.acct), ...Object.keys(next.acct)]);
+    for (const id of ids) {
+      const a = prev.acct[id], b = next.acct[id];
+      const o = a ? a.bal : null, n = b ? b.bal : null;
+      if (o === n) continue;
+      if (o === null && n === 0) continue; // a new empty account is not a balance change
+      rows.push({ id: histId(ts), ts, kind: 'acct', acct: id, name: (b || a).name, old: o, new: n, change: (n || 0) - (o || 0), cause: a ? (b ? cause : 'Account deleted') : (cause === 'Edit' ? 'Account added' : cause) });
+    }
+    if (prev.pending !== next.pending) rows.push({ id: histId(ts), ts, kind: 'pending', acct: 'pending', name: 'Pending · รอรับ', old: prev.pending, new: next.pending, change: next.pending - prev.pending, cause });
+    return rows;
+  }
+  // one starting row per account (+ pending) when the history is created (upgrade from <= 1.7.0 or a new install)
+  function histBackfill(accounts, items, now) {
+    const rows = [];
+    for (const a of sortAccounts(accounts || [])) rows.push({ id: histId(now), ts: a.updated || now, kind: 'acct', acct: a.id, name: a.name, old: null, new: a.balance || 0, change: a.balance || 0, cause: 'Starting balance' });
+    const p = mlTotals([], items).pending;
+    rows.push({ id: histId(now), ts: now, kind: 'pending', acct: 'pending', name: 'Pending · รอรับ', old: null, new: p, change: p, cause: 'Starting balance' });
+    return rows;
+  }
+  function normHistory(list) {
+    const out = [], seen = new Set();
+    for (const r of Array.isArray(list) ? list : []) {
+      if (!r || !r.id || seen.has(r.id) || !Number.isFinite(+r.ts)) continue;
+      const num = v => (v === null || v === undefined ? null : (Number.isFinite(+v) ? Math.round(+v) : null));
+      out.push({ id: String(r.id), ts: +r.ts, kind: r.kind === 'pending' ? 'pending' : 'acct', acct: String(r.acct || ''), name: String(r.name || '').slice(0, 60), old: num(r.old), new: num(r.new), change: num(r.change) || 0, cause: String(r.cause || '').slice(0, 80) });
+      seen.add(r.id);
+    }
+    return out.sort((a, b) => a.ts - b.ts);
+  }
+  // series for the chart: key = 'total' (accounts + pending, like รวม), 'bank' (accounts only), 'pending', or an account id
+  function histSeries(rows, key) {
+    const cur = {}; let pend = 0, havePend = false; const pts = [];
+    for (const r of (rows || []).slice().sort((a, b) => a.ts - b.ts)) {
+      if (r.kind === 'pending') { pend = r.new || 0; havePend = true; } else { if (r.new === null) delete cur[r.acct]; else cur[r.acct] = r.new; }
+      let v;
+      if (key === 'pending') { if (r.kind !== 'pending') continue; v = pend; }
+      else if (key === 'total' || key === 'bank') v = Object.values(cur).reduce((s, x) => s + x, 0) + (key === 'total' && havePend ? pend : 0);
+      else { if (r.acct !== key) continue; v = r.new || 0; }
+      if (pts.length && pts[pts.length - 1].ts === r.ts) pts[pts.length - 1].v = v; else pts.push({ ts: r.ts, v });
+    }
+    return pts;
+  }
+  const api = { histSnapshot, histDiff, histBackfill, normHistory, histSeries, mlSig, mmSig, stampFallback, applyStamp, mmTotals, mmText, parseBaht, parseKBankSMS, parseBalanceText, MAIN_ACCOUNT_ID, sortAccounts, acctTotal, legacyAccount, normAccounts, sortGroups, sortItems, flattenML, mlTotals, fmtPlain, mlText, EXPENSE_CATS, INCOME_CATS, PALETTE, allCategories, findCategory, toCents, fmtMoney, dayKey, monthKey, monthLabel,
     addMonths, daysInMonth, dayLabel, toLocalInputs, fromLocalInputs, totals, filterEntries, sortNewest, groupByDay,
     monthSummary, monthsWithData, validateEntry, uid, slug };
   if (typeof module !== 'undefined' && module.exports) module.exports = api; else root.Logic = api;

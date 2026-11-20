@@ -71,3 +71,21 @@ Files: index.html, style.css, logic.js (pure logic), db.js (IndexedDB), app.js (
 - **Turning it off** needs your current passcode. Face ID alone is not enough. After that the app opens with no unlock screen, and Settings shows: "⚠️ Lock is off: anyone with this phone can open the app."
 - **How lock-off storage works:** records and photos stay encrypted on the phone. The data key is kept on the phone (kv `dekOpen`) so the app can open without asking. In practice that is as open as plain storage, which is why the warning is shown. Your passcode and Face ID set-ups are kept, so turning the lock back on only asks for your passcode and then deletes the stored key. Nothing is re-encrypted, so there is no migration risk. If you forgot the passcode while the lock is off, you can set a new one at that point.
 - If you had the lock on before v1.6.4, it stays on. Nothing to migrate, and no data changes.
+
+## Google Drive auto-backup (v1.7.0)
+- Settings → **Google Drive backup**, then **Auto-backup to Drive**. The one-time Google setup is in `DRIVE-SETUP.md`. The Client ID goes in `drive.js` (`CLIENT_ID`).
+- The backup is ONE file, `my-expenses-backup.json`, in your Drive. About 5 s after your last change the app overwrites it by its file ID (PATCH, resumable upload). If you deleted the file, it is created again.
+- The file is encrypted on the phone (AES-256-GCM, key from PBKDF2-SHA256 with 600k rounds) using your app passcode (lock on) or a backup passcode set at Drive setup (lock off). It is the same format as an encrypted export, so **Restore from backup…** with the file and passcode also works.
+- Settings shows **Last Drive backup** (time and status). **Restore from Drive…** asks for the passcode, shows a preview of the counts, then replaces everything.
+- Sign-in uses Google Identity Services (token client, `drive.file` scope). Expired tokens are renewed silently when possible. Otherwise **Reconnect Drive** appears, and the pending change is uploaded after you reconnect.
+- The CSP is relaxed only for accounts.google.com, apis.google.com, www.googleapis.com and oauth2.googleapis.com. Nothing contacts Google until you turn the backup on.
+
+## Balance & pending history, moving items (v1.7.1)
+- **Balance history · ประวัติยอดเงิน:** whenever an account balance or the Main Money **Pending · รอรับ** total changes, the app logs a row: time, account, old → new, change and the cause. Causes include manual edit, KBank SMS, an entry being added, edited, received, deleted or moved, an import or a restore.
+  - Open it by tapping the "Balance updated" line, the Total, the 📈 button, or the Pending box (which opens Pending history).
+  - Newest first, grouped by day, with a filter by account. Increases show in green, decreases in red, with a line chart.
+- **Pending updated · อัปเดตรอรับ:** a third time on the Main Money stamp line, showing when the Pending total last changed.
+- The history lives in the encrypted vault (kv `history`). It is part of backups, Drive backups and restores. When you upgrade from an older version, one starting row is created per account plus one for Pending.
+- **Move between Main Money and Money Mother:** in an item's edit sheet, tap "↔ Move to Money Mother" or "↔ Move to Main Money". Photos, date, note and amount are kept, and the status becomes Owed or Pending.
+  - Main Money entries don't belong to an account, so no account question is asked.
+  - If a received Main entry had been added to the bank, you can subtract it while moving.

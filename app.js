@@ -4,7 +4,7 @@
   const L = window.Logic;
   const $ = (s, el) => (el || document).querySelector(s);
   const $$ = (s, el) => Array.from((el || document).querySelectorAll(s));
-  const APP_VERSION = '1.6.4';
+  const APP_VERSION = '1.7.1';
 
   const state = {
     entries: [],
@@ -89,7 +89,7 @@
   }
   DB.onWrite(info => {
     stampScopes(info).forEach(x => stampPending.add(x));
-    clearTimeout(stampTimer); stampTimer = setTimeout(() => { if (reconcileStamps()) renderStamps(); }, 700);
+    clearTimeout(stampTimer); stampTimer = setTimeout(() => { const h = reconcileHistory(); if (reconcileStamps() || h) renderStamps(); }, 700);
   });
   async function holdStamps(fn) { stampHold++; try { return await fn(); } finally { stampHold--; } }
   function tabSig(k) { return k === 'ml' ? L.mlSig(state.ml.accounts, state.ml.items) : L.mmSig(state.mm.items); }
@@ -118,7 +118,28 @@
       el.querySelector('[data-stamp="other"]').textContent = stampText(s.other);
       el.hidden = !stamps;
     }
+    const pe = $('#ml-stamps [data-stamp="pend"]'); if (pe) pe.textContent = stampText(lastPendingTs());
+    if (!$('#histsheet').hidden) renderHistory();
   }
+
+  // ---------- v1.7.1 balance + pending history ----------
+  // Every change of an account balance or of Main Money "Pending · รอรับ" is logged (kv 'history', encrypted like all data).
+  // Changes are found by comparing totals after each change, so every path (sheet, swipe, SMS, import, restore, move) is covered;
+  // the action that made the change sets a short cause label first.
+  let hist = null, histBase = null, histCause = null;
+  function cause(label) { histCause = { label: String(label).slice(0, 80), at: Date.now() }; }
+  function reconcileHistory() {
+    if (!hist || !histBase || stampHold || !DB.isUnlocked()) return false;
+    const next = L.histSnapshot(state.ml.accounts, state.ml.items);
+    const c = histCause && Date.now() - histCause.at < 30000 ? histCause.label : 'Edit';
+    const rows = L.histDiff(histBase, next, Date.now(), c);
+    histBase = next;
+    if (!rows.length) return false;
+    histCause = null; hist.push(...rows);
+    DB.setKV('history', hist).catch(e => toast('Couldn’t save the history: ' + (e && e.message || e)));
+    return true;
+  }
+  function lastPendingTs() { if (!hist) return null; for (let i = hist.length - 1; i >= 0; i--) if (hist[i].kind === 'pending') return hist[i].ts; return null; }
 
   // ---------- data ----------
   async function loadAll() {
@@ -142,6 +163,15 @@
     state.ml = { bank: 0, bankUpdated: null, accounts, groups: [], items, snaps: mlSnaps || [] }; syncBank();
     state.mm = { items: (await DB.allMM()) || [] };
     const st = await DB.getStamps(); stamps = (st && typeof st === 'object') ? Object.assign({}, st) : {};
+    const hk = await DB.getKV('history', null);
+    if (Array.isArray(hk)) hist = L.normHistory(hk);
+    else { hist = L.histBackfill(state.ml.accounts, state.ml.items, Date.now()); await DB.setKV('history', hist); } // upgrade/new install: one starting row per account
+    if (!histBase) histBase = L.histSnapshot(state.ml.accounts, state.ml.items);
+    const dc = await DB.getKV('drive', null); driveCfg = dc && dc.key ? dc : null;
+    if (driveCfg) { // a change made just before the app was closed or locked is sent now
+      const last = Math.max(0, ...['ml', 'mm'].map(k => Math.max((stamps[k] && stamps[k].bal) || 0, (stamps[k] && stamps[k].other) || 0)));
+      if (driveDirty || last > (driveCfg.lastAt || 0)) scheduleDrive(3000);
+    }
   }
 
   // ---------- render: home ----------
@@ -275,18 +305,18 @@
     const cc = state.settings.customCats;
     $('#custom-cats').innerHTML = cc.length ? cc.map(c => `<div class="row catedit"><div class="ico" style="background:${tint(c.color, .18)}">${c.icon}</div><div class="grow">${esc(c.name)} <span class="tag">${c.type === 'income' ? 'Income' : 'Expense'}</span></div><button class="x" data-delcat="${esc(c.id)}">Delete</button></div>`).join('')
       : `<div class="row"><span class="row-r">No custom categories yet</span></div>`;
-    renderSecurity();
+    renderSecurity(); renderDrive();
     $('#st-count').textContent = state.entries.length;
     $('#st-count-row').hidden = !state.entries.length; // expense entries are kept (and backed up) but their screens are hidden
     $('#st-mlcount').textContent = state.ml.items.length + (state.ml.snaps.length ? ' · ' + state.ml.snaps.length + ' snapshots' : '');
     if (navigator.storage && navigator.storage.estimate) navigator.storage.estimate().then(e => { $('#st-used').textContent = fmtBytes(e.usage); }).catch(() => {});
     if (navigator.storage && navigator.storage.persisted) navigator.storage.persisted().then(p => { $('#st-persist').textContent = p ? 'On ✓' : 'Not granted'; }).catch(() => { $('#st-persist').textContent = 'Unknown'; });
     else $('#st-persist').textContent = 'Not supported';
-    $('#ver').textContent = 'My Money ' + APP_VERSION + ' · data stored on this device only';
+    $('#ver').textContent = 'My Money ' + APP_VERSION + ' · data on this device' + (driveCfg ? ' + encrypted Drive backup' : ' only');
   }
 
   function render() {
-    reconcileStamps(); renderStamps();
+    reconcileHistory(); reconcileStamps(); renderStamps();
     if (state.view === 'home') renderHome();
     else if (state.view === 'summary') renderSummary();
     else if (state.view === 'moneyleft') renderMoneyLeft();
@@ -697,7 +727,7 @@
       buttons: [{ label: 'Cancel', value: false }, { label: 'Update', value: true, bold: true }] });
     if (!ok) return false;
     const x = state.ml.accounts.find(a => a.id === acct.id); if (!x) return false;
-    x.balance = r.balance; x.updated = Date.now(); await saveAccounts(); haptic(); toast(`${x.name} updated · ${mlm(r.balance)}`); render();
+    cause(srcLabel === 'KBank SMS' ? 'KBank SMS' : 'SMS link'); x.balance = r.balance; x.updated = Date.now(); await saveAccounts(); haptic(); toast(`${x.name} updated · ${mlm(r.balance)}`); render();
     return true;
   }
   async function readClipboard() { try { return await navigator.clipboard.readText(); } catch (_) { return null; } }
@@ -762,13 +792,13 @@
       const order = state.ml.accounts.reduce((m, a) => Math.max(m, a.order || 0), -1) + 1;
       state.ml.accounts.push({ id: 'acct-' + L.uid(), name, type: acform.type, balance: v, updated: now, order, created: now });
     }
-    await saveAccounts(); closeAcctSheet(); haptic(); toast(ed ? 'Account saved' : 'Account added · เพิ่มบัญชีแล้ว'); render();
+    cause(ed ? 'Manual edit' : 'Account added'); await saveAccounts(); closeAcctSheet(); haptic(); toast(ed ? 'Account saved' : 'Account added · เพิ่มบัญชีแล้ว'); render();
   }
   async function deleteAcctById(id) {
     const x = state.ml.accounts.find(a => a.id === id); if (!x) return;
     if (state.ml.accounts.length <= 1) { closeOpenRow(); await dialog({ title: 'Keep one account', msg: 'You need at least one account. Set its balance to 0 instead.' }); return; }
     if (!(await confirmDlg('Delete this account? · ลบบัญชี', `${x.name} · ${mlm(x.balance)}\nIts balance is removed from รวม. This can't be undone.`, 'Delete', true))) { closeOpenRow(); return; }
-    state.ml.accounts = state.ml.accounts.filter(a => a.id !== id); await saveAccounts();
+    cause('Account deleted'); state.ml.accounts = state.ml.accounts.filter(a => a.id !== id); await saveAccounts();
     openRow = null; if (acform) closeAcctSheet(); haptic(); toast('Account deleted'); render();
   }
   async function markReceived(it) {
@@ -777,6 +807,7 @@
     if (!a) return;
     const now = Date.now();
     const upd = Object.assign({}, it, { status: 'received', receivedAt: now, addedToBank: a === 'bank', updated: now });
+    cause(a === 'bank' ? `Received: ${it.name} (added to bank)` : `Received: ${it.name}`);
     if (a === 'bank') await mlAdjustPrimary(it.amount, now);
     await mlPutItem(upd); haptic();
     toast(a === 'bank' ? 'Received · added to bank' : 'Marked received'); render();
@@ -788,6 +819,7 @@
     const a = await dialog({ title: 'Move back to pending?', msg: `${it.name} · ${mlm(it.amount)}`, buttons: btns, stack: true });
     if (!a) return;
     const now = Date.now();
+    cause(a === 'bank' ? `Back to pending: ${it.name} (taken from bank)` : `Back to pending: ${it.name}`);
     if (a === 'bank') await mlAdjustPrimary(-it.amount, now);
     await mlPutItem(Object.assign({}, it, { status: 'pending', receivedAt: null, addedToBank: false, updated: now }));
     toast('Moved to pending'); render();
@@ -838,6 +870,7 @@
     $('#ml-note').value = item ? item.note || '' : '';
     $('#ml-date').value = item ? item.date || '' : '';
     $('#ml-err').hidden = true; $('#ml-delete').hidden = !item; $('#ml-delete-top').hidden = !item;
+    $('#ml-move').hidden = !item; $('#ml-move').textContent = mm ? '↔ Move to Main Money · ย้ายไปเงินหลัก' : '↔ Move to Money Mother · ย้ายไปเงินแม่';
     $('#ml-meta').textContent = item ? 'Added ' + fmtStamp(item.created || Date.now()) + (item.receivedAt ? (mm ? ' · Repaid ' : ' · Received ') + fmtStamp(item.receivedAt) : '') : '';
     if (mm && !item) $('#ml-date').value = L.dayKey ? L.dayKey(Date.now()) : '';
     $('.ml-sym').textContent = state.settings.symbol;
@@ -896,12 +929,13 @@
       if (book === 'mm') { /* Money Mother never touches bank accounts */ }
       else if (it.status === 'received' && !wasRec) {
         const add = await confirmDlg('Add to bank balance?', `${name} · ${mlm(amount)} received.\nAdd it to ${primaryAccount().name} so the total stays the same?`, 'Add to bank');
-        if (add) { await mlAdjustPrimary(amount, now); it.addedToBank = true; }
+        if (add) { cause(`Received: ${name} (added to bank)`); await mlAdjustPrimary(amount, now); it.addedToBank = true; }
       } else if (wasRec && it.status !== 'received' && prev.addedToBank) {
         const sub = await confirmDlg('Subtract from bank?', `${name} was added to the bank when received. Subtract ${mlm(prev.amount)} again?`, 'Subtract');
-        if (sub) await mlAdjustPrimary(-prev.amount, now);
+        if (sub) { cause(`Back to pending: ${name} (taken from bank)`); await mlAdjustPrimary(-prev.amount, now); }
         it.addedToBank = false;
       }
+      if (!histCause || Date.now() - histCause.at > 1000) cause(it.status === 'received' && !wasRec ? `Received: ${name}` : wasRec && it.status !== 'received' ? `Back to pending: ${name}` : (prev ? `Edited: ${name}` : `Added: ${name}`));
       await putBookItem(book, it);
       closeMLSheet(); haptic(); toast(prev ? 'Saved' : 'Item added'); requestPersist(); render();
     } catch (e) { console.error(e); show('Could not save: ' + (e && e.message || e)); }
@@ -910,7 +944,7 @@
   async function deleteMLItem() {
     if (!mlform || !mlform.editing) return; const it = mlform.editing;
     if (!(await confirmDlg('Delete this item?', `${it.name} · ${mlm(it.amount)}\nThis can't be undone.`, 'Delete', true))) return;
-    await deleteBookItem(mlform.book || 'ml', it.id);
+    cause(`Deleted: ${it.name}`); await deleteBookItem(mlform.book || 'ml', it.id);
     closeMLSheet(); toast('Deleted'); render();
   }
 
@@ -939,7 +973,7 @@
   async function deleteMLById(id) {
     const it = findItem(id); if (!it) return;
     if (!(await confirmDlg('Delete this item? · ลบรายการ', `${it.name} · ${mlm(it.amount)}\nThis can't be undone.`, 'Delete', true))) { closeOpenRow(); return; }
-    await deleteBookItem(bookOf(id), it.id);
+    cause(`Deleted: ${it.name}`); await deleteBookItem(bookOf(id), it.id);
     openRow = null; haptic(); toast('Deleted · ลบแล้ว'); render();
   }
   function bindPeek() {
@@ -1074,6 +1108,13 @@
     $('#ml-photo-view').addEventListener('click', () => { if (mlform && mlform.photo) openViewer(mlform.photo); });
     $('#ml-photo-img').addEventListener('click', () => { if (mlform && mlform.photo) openViewer(mlform.photo); });
     $('#ml-delete').addEventListener('click', deleteMLItem);
+    $('#ml-move').addEventListener('click', () => moveItem().catch(e => dialog({ title: 'Move failed', msg: String(e && e.message || e) })));
+    $('#hist-close').addEventListener('click', closeHistory);
+    $('#hist-filter').addEventListener('change', ev => { histKey = ev.target.value; renderHistory(); });
+    $('#ml-stamps').addEventListener('click', ev => openHistory(ev.target.closest('#ml-pend-stamp') ? 'pending' : 'total'));
+    $('#ml-total').addEventListener('click', () => openHistory('total'));
+    $('#ml-pending-col').addEventListener('click', () => openHistory('pending'));
+    $('#ml-history').addEventListener('click', () => openHistory('total'));
     $('#ml-delete-top').addEventListener('click', deleteMLItem);
   }
 
@@ -1153,7 +1194,7 @@
     return { app: 'my-expenses', format: 5, appVersion: APP_VERSION, exportedAt: new Date().toISOString(),
       settings: { start: state.settings.start, symbol: state.settings.symbol, customCats: state.settings.customCats }, entries,
       moneyLeft: { accounts: state.ml.accounts.map(x => Object.assign({}, x)), bank: state.ml.bank, bankUpdated: state.ml.bankUpdated, groups: [], items, snapshots: state.ml.snaps.slice().sort((a, b) => a.ts - b.ts) },
-      moneyMother: { items: mmItems }, lastUpdated: stamps ? JSON.parse(JSON.stringify(stamps)) : null };
+      moneyMother: { items: mmItems }, history: (hist || []).slice(), lastUpdated: stamps ? JSON.parse(JSON.stringify(stamps)) : null };
   }
   async function exportBackup(mode) {
     if (!mode) mode = await dialog({ title: 'Export backup · สำรองข้อมูล', msg: 'An encrypted backup is protected by a passcode you choose (you need it to restore).',
@@ -1227,7 +1268,7 @@
     const ml = parseMoneyLeft(data.moneyLeft);
     const mm = parseMother(data.moneyMother);
     const partial = Array.isArray(data.partial) ? data.partial : null;
-    return { entries, bad, ml, mm, mlOnly: !!(partial && partial.length === 1 && partial[0] === 'moneyLeft'), mmOnly: !!(partial && partial.length === 1 && partial[0] === 'moneyMother'),
+    return { entries, bad, ml, mm, history: L.normHistory(data.history), mlOnly: !!(partial && partial.length === 1 && partial[0] === 'moneyLeft'), mmOnly: !!(partial && partial.length === 1 && partial[0] === 'moneyMother'),
       settings: { start: Number.isInteger(s.start) ? s.start : 0, symbol: typeof s.symbol === 'string' && s.symbol ? s.symbol.slice(0, 4) : '฿', customCats: Array.isArray(s.customCats) ? s.customCats.filter(c => c && c.id && c.name) : [] }, exportedAt: data.exportedAt };
   }
   async function applyMoneyLeft(ml, replace) {
@@ -1264,6 +1305,23 @@
       list = list.map((it, k) => (have.has(it.id) ? it : Object.assign({}, it, { order: base + k })));
     }
     await DB.putMMs(list);
+  }
+  // replace everything on this device with a parsed backup (file restore "Replace everything" and Restore from Drive)
+  async function replaceAllWith(parsed, label) {
+    cause(label || 'Restore');
+    for (const e of parsed.entries) if (e.photo && !e.thumb) { try { e.thumb = (await processPhoto(e.photo, 1600, 192)).thumb; } catch (_) {} }
+    await DB.clearEntries(); thumbURLs.forEach(v => revokeLater(v.url)); thumbURLs.clear();
+    state.settings = parsed.settings;
+    await holdStamps(async () => {
+      await DB.putEntries(parsed.entries);
+      await Promise.all([DB.setKV('start', state.settings.start), DB.setKV('symbol', state.settings.symbol), DB.setKV('customCats', state.settings.customCats)]);
+      if (parsed.ml) await applyMoneyLeft(parsed.ml, true); else { await DB.clearML(); await DB.setKV('mlAccounts', null); }
+      if (parsed.history.length) { hist = parsed.history; await DB.setKV('history', hist); } // the backup's history; the restore itself is logged next
+      await applyMother(parsed.mm, true);
+      await loadAll();
+    });
+    thumbURLs.forEach(v => revokeLater(v.url)); thumbURLs.clear();
+    requestPersist(); render();
   }
   async function importBackup(file) {
     let parsed;
@@ -1303,6 +1361,7 @@
       if (!mode) return;
       if (mode === 'replace' && (state.ml.items.length || state.ml.bankUpdated) &&
         !(await confirmDlg('Replace Main Money?', `Your current bank balance, ${state.ml.items.length} entries and ${state.ml.snaps.length} snapshots will be erased.`, 'Replace', true))) return;
+      cause(mode === 'replace' ? 'Import (replace Main Money)' : 'Import (merge)');
       await holdStamps(async () => { await applyMoneyLeft(parsed.ml, mode === 'replace'); await loadAll(); });
       resetThumbs(); toast('Main Money restored'); requestPersist(); render(); return;
     }
@@ -1312,15 +1371,16 @@
     if (!mode) return;
     if (mode === 'replace') {
       if (!(await confirmDlg('Replace all data?', `All current data on this device will be replaced.`, 'Replace', true))) return;
-      await DB.clearEntries(); resetThumbs();
-      state.settings = parsed.settings;
+      await replaceAllWith(parsed); toast('Backup restored'); return;
     } else if (!state.entries.length && !state.settings.start && !state.settings.customCats.length) {
       state.settings = parsed.settings; // fresh device: adopt the backup's settings too
     } else {
       const ids = new Set(state.settings.customCats.map(c => c.id));
       state.settings.customCats = state.settings.customCats.concat(parsed.settings.customCats.filter(c => !ids.has(c.id)));
     }
+    cause('Import (merge)');
     await holdStamps(async () => { // restore = one change per tab: totals compared once, after everything is reloaded
+      if (parsed.history.length && hist) { hist = L.normHistory(hist.concat(parsed.history)); await DB.setKV('history', hist); }
       await DB.putEntries(parsed.entries);
       await Promise.all([DB.setKV('start', state.settings.start), DB.setKV('symbol', state.settings.symbol), DB.setKV('customCats', state.settings.customCats)]);
       await applyMoneyLeft(parsed.ml, mode === 'replace');
@@ -1392,6 +1452,8 @@
     if (!DB.isEncrypted() || lockOpen) return;
     if (form) closeSheet(); if (mlform) closeMLSheet(); if (acform) closeAcctSheet(); closePeek(); if (!$('#viewer').hidden) closeViewer();
     $('#dlg').hidden = true;
+    driveEpoch++; clearTimeout(driveTimer); if (driveCfg && driveBusy) driveDirty = true; driveCfg = null;
+    hist = null; histBase = null; histCause = null; if (!$('#histsheet').hidden) hideSheetEl($('#histsheet'));
     currentDEK = null; DB.setKey(null);
     stamps = null; stampPending.clear(); state.entries = []; state.ml = { bank: 0, bankUpdated: null, accounts: [], groups: [], items: [], snaps: [] }; state.mm = { items: [] };
     thumbURLs.forEach(v => revokeLater(v.url)); thumbURLs.clear();
@@ -1436,7 +1498,7 @@
     const r = await passDialog({ title: 'Change passcode', current: true, confirm: true, ok: 'Change' }); if (!r) return;
     try { await Vault.unwrapWithPasscode(cryptoMeta.passcode, r.current); } catch (_) { await dialog({ title: 'Wrong passcode', msg: 'The current passcode is not correct.' }); return; }
     cryptoMeta = Object.assign({}, cryptoMeta, { passcode: await Vault.wrapWithPasscode(currentDEK, r.passcode) });
-    await DB.setCryptoMeta(cryptoMeta); toast('Passcode changed'); renderSettings();
+    await DB.setCryptoMeta(cryptoMeta); await driveFollowPasscode(r.passcode); toast('Passcode changed'); renderSettings();
   }
   async function reenrollFace() {
     if (!(await Vault.platformAvailable())) { await dialog({ title: 'Face ID unavailable', msg: 'This device has no platform authenticator available to this app.' }); return; }
@@ -1468,7 +1530,7 @@
         buttons: [{ label: 'Set a new passcode', value: 'new', bold: true }, { label: 'Cancel', value: null }] });
       if (a !== 'new') return;
       const np = await passDialog({ title: 'Set a new passcode', msg: 'Min 6 characters. You need it to unlock and to turn the lock off.', confirm: true }); if (!np) return;
-      cryptoMeta = Object.assign({}, cryptoMeta, { passcode: await Vault.wrapWithPasscode(currentDEK, np) }); await DB.setCryptoMeta(cryptoMeta);
+      cryptoMeta = Object.assign({}, cryptoMeta, { passcode: await Vault.wrapWithPasscode(currentDEK, np) }); await DB.setCryptoMeta(cryptoMeta); await driveFollowPasscode(np);
     }
     if (!cryptoMeta.prf && !cryptoMeta.prfUnsupported && (await Vault.platformAvailable())) {
       const useFace = await dialog({ title: 'Unlock with Face ID?', msg: 'Face ID derives a key on this device to unlock your data.', buttons: [{ label: 'Use Face ID', value: true, bold: true }, { label: 'Passcode only', value: false }] });
@@ -1519,6 +1581,265 @@
     });
   }
 
+  // ---------- v1.7.0 Google Drive auto-backup ----------
+  // One encrypted file (my-expenses-backup.json) in your Drive, overwritten ~5 s after every change.
+  // kv 'drive' (encrypted like your data when the vault is on): { fileId, key: {raw, salt, iter}, mode: 'app'|'own', lastAt, lastStatus, lastError }
+  const DRIVE_DEBOUNCE = 5000;
+  const DRIVE_IGNORE_KV = new Set(['drive', 'crypto', 'dekOpen', 'hintDismissed', 'lastBackup']);
+  let driveCfg = null, driveTimer = 0, driveBusy = false, driveDirty = false, driveEpoch = 0, driveNeedsAuth = false, driveRetry = 0, driveState = '';
+  function driveChange(info) {
+    if (!info) return false;
+    for (const st of info.stores) {
+      if (st !== 'kv') return true;
+      for (const k of info.keys) if (!DRIVE_IGNORE_KV.has(k)) return true;
+    }
+    return false;
+  }
+  DB.onWrite(info => { if (driveCfg && driveChange(info)) scheduleDrive(); });
+  function scheduleDrive(delay) {
+    driveDirty = true;
+    clearTimeout(driveTimer); driveTimer = setTimeout(() => runDriveBackup().catch(() => {}), delay == null ? DRIVE_DEBOUNCE : delay);
+  }
+  async function saveDriveCfg(patch) {
+    if (!driveCfg) return;
+    driveCfg = Object.assign({}, driveCfg, patch);
+    try { await DB.setKV('drive', driveCfg); } catch (_) {}
+  }
+  async function runDriveBackup() {
+    clearTimeout(driveTimer);
+    if (!driveCfg || !DB.isUnlocked()) return;               // locked: wait until unlocked (driveDirty stays set)
+    if (driveBusy) { driveDirty = true; return; }             // a newer change will be sent after this upload
+    driveBusy = true; driveDirty = false; const epoch = driveEpoch;
+    driveState = 'uploading'; renderDrive();
+    try {
+      const data = await buildBackup();
+      if (epoch !== driveEpoch || !driveCfg) throw Object.assign(new Error('locked'), { code: 'ABORT' }); // locked/erased mid-way: never upload a half-cleared state
+      const file = await Vault.encryptBackupWithKey(driveCfg.key, JSON.stringify(Object.assign(data, { source: 'drive-auto' })));
+      const r = await Drive.save(driveCfg.fileId, JSON.stringify(file));
+      driveNeedsAuth = false; driveRetry = 0; driveState = '';
+      await saveDriveCfg({ fileId: r.id, lastAt: Date.now(), lastStatus: r.created && driveCfg.fileId ? 'recreated' : 'ok', lastError: '' });
+    } catch (e) {
+      if (e.code === 'ABORT') { driveDirty = true; driveState = ''; }
+      else {
+        driveDirty = true; driveState = '';
+        if (e.code === 'RECONNECT' || e.code === 'AUTH') driveNeedsAuth = true;
+        else { driveRetry = Math.min(driveRetry + 1, 6); scheduleDrive(Math.min(30000 * 2 ** (driveRetry - 1), 15 * 60000)); } // offline etc.: retry with back-off
+        await saveDriveCfg({ lastStatus: driveNeedsAuth ? 'reconnect' : (e.code === 'OFFLINE' ? 'offline' : 'error'), lastError: String(e.message || e) });
+      }
+    } finally {
+      driveBusy = false; renderDrive();
+      if (driveDirty && driveCfg && !driveNeedsAuth && DB.isUnlocked() && !driveRetry) scheduleDrive();
+    }
+  }
+  function renderDrive() {
+    const on = !!driveCfg, el = $('#drive-toggle'); if (!el) return;
+    el.setAttribute('aria-checked', on ? 'true' : 'false');
+    $('#drive-sub').textContent = on ? (driveCfg.mode === 'app' ? 'On · encrypted with your app passcode' : 'On · encrypted with your backup passcode') : 'Off';
+    $$('.drive-on-row').forEach(e => { e.hidden = !on; });
+    let st = '—', cls = '';
+    if (on) {
+      const s = driveCfg.lastStatus;
+      if (driveState === 'uploading') st = 'Uploading…';
+      else if (driveNeedsAuth || s === 'reconnect') { st = 'Needs reconnect ⚠️'; cls = 'warn'; }
+      else if (s === 'offline') { st = 'Offline · will retry'; cls = 'warn'; }
+      else if (s === 'error') { st = 'Failed · will retry ⚠️'; cls = 'warn'; }
+      else if (driveCfg.lastAt) st = '✓ ' + fullStamp(driveCfg.lastAt);
+      else st = 'Waiting…';
+      if (driveCfg.lastAt && st.indexOf('✓') !== 0) st += ' · last OK ' + fullStamp(driveCfg.lastAt);
+    }
+    $('#drive-last').textContent = st; $('#drive-last').className = 'row-r ' + cls;
+    $('#btn-drive-reconnect').hidden = !(on && (driveNeedsAuth || (driveCfg.lastStatus === 'reconnect')));
+    $('#drive-err').hidden = !(on && driveCfg.lastError && driveCfg.lastStatus !== 'ok' && driveCfg.lastStatus !== 'recreated');
+    $('#drive-err').textContent = on ? (driveCfg.lastError || '') : '';
+  }
+  // Opens Google's window. Call straight from a tap.
+  function driveSignIn() { return Drive.signIn(true); }
+  async function driveAskConnect(title, msg) {
+    if (!Drive.configured()) { await dialog({ title: 'Google Drive not set up yet', msg: 'This copy of the app has no Google Client ID yet. Follow DRIVE-SETUP.md (about 10 minutes), put the ID into drive.js and deploy again.' }); return null; }
+    Drive.preload(); // load Google's script while you read, so the next tap opens the window directly
+    let p = null;
+    const go = await dialog({ title, msg, buttons: [{ label: 'Continue with Google', bold: true, value: () => { p = driveSignIn(); p.catch(() => {}); return true; } }, { label: 'Cancel', value: false }] });
+    if (!go) return null;
+    try { await p; return true; }
+    catch (e) {
+      if (e.code === 'OFFLINE') { await dialog({ title: 'Can’t reach Google', msg: 'Check your internet connection and try again.' }); return null; }
+      await dialog({ title: 'Google sign-in didn’t finish', msg: String(e.message || e) + '\nNothing was changed.' }); return null;
+    }
+  }
+  async function driveSetup() {
+    if (!Drive.configured()) { await driveAskConnect(); return; } // explains the missing Client ID before asking for anything
+    // 1) passcode for the backup file
+    let key, mode;
+    if (DB.isEncrypted() && !lockOpen) {
+      const p = await passDialog({ title: 'Drive backup passcode', msg: 'Your Drive backup is encrypted with your app passcode. Enter it to continue. You need it to restore on a new phone.', ok: 'Continue' });
+      if (!p) return;
+      try { await Vault.unwrapWithPasscode(cryptoMeta.passcode, p); } catch (_) { await dialog({ title: 'Wrong passcode · รหัสไม่ถูกต้อง', msg: 'Drive backup was not turned on.' }); return; }
+      toast('Preparing encryption…'); key = await Vault.deriveBackupKey(p); mode = 'app';
+    } else {
+      const p = await passDialog({ title: 'Set a backup passcode', msg: 'App lock is off, so the Drive backup gets its own passcode. Google only stores the encrypted file.\n⚠️ Without this passcode the backup cannot be restored by anyone.', confirm: true, ok: 'Continue' });
+      if (!p) return;
+      toast('Preparing encryption…'); key = await Vault.deriveBackupKey(p); mode = 'own';
+    }
+    // 2) Google sign-in (drive.file: the app only sees the files it created)
+    if (!(await driveAskConnect('Connect Google Drive', 'Sign in with Google and allow My Money to create its own backup file. It can’t see your other Drive files.'))) return;
+    // 3) existing backup from another install?
+    let existing = null;
+    try { existing = await Drive.findFile(); } catch (e) { await dialog({ title: 'Drive error', msg: String(e.message || e) }); return; }
+    if (existing) {
+      const a = await dialog({ title: 'A backup is already in your Drive', msg: `Saved ${existing.modifiedTime ? fullStamp(Date.parse(existing.modifiedTime)) : ''}.\n\nRestore it to this phone, or replace it with this phone’s data from now on?`,
+        buttons: [{ label: 'Restore it to this phone', value: 'restore', bold: true }, { label: 'Replace it with this phone’s data', value: 'overwrite', danger: true }, { label: 'Cancel', value: null }] });
+      if (!a) return;
+      if (a === 'restore') {
+        driveCfg = { fileId: existing.id, key, mode, lastAt: 0, lastStatus: '', lastError: '', on: Date.now() };
+        await DB.setKV('drive', driveCfg); renderDrive();
+        await driveRestore(true); return;
+      }
+    }
+    driveCfg = { fileId: existing ? existing.id : null, key, mode, lastAt: 0, lastStatus: '', lastError: '', on: Date.now() };
+    await DB.setKV('drive', driveCfg); driveNeedsAuth = false; renderDrive();
+    toast('Drive backup on ☁️'); await runDriveBackup();
+  }
+  async function driveTurnOff() {
+    const ok = await confirmDlg('Turn off Drive backup?', 'Automatic backups stop. The last backup file stays in your Google Drive (delete it there if you want).', 'Turn off', true);
+    if (!ok) return;
+    clearTimeout(driveTimer); driveCfg = null; driveNeedsAuth = false; Drive.disconnect(); await DB.setKV('drive', null); renderDrive(); toast('Drive backup off');
+  }
+  async function driveReconnect() {
+    if (!(await driveAskConnect('Reconnect Google Drive', 'Google needs you to sign in again so backups can continue.'))) return;
+    driveNeedsAuth = false; await saveDriveCfg({ lastStatus: driveCfg.lastAt ? 'ok' : '', lastError: '' }); renderDrive(); await runDriveBackup();
+  }
+  async function driveRestore(afterSetup) {
+    if (!Drive.hasToken() && !(await driveAskConnect('Restore from Google Drive', 'Sign in with Google to read your My Money backup.'))) return;
+    let file = driveCfg && driveCfg.fileId ? { id: driveCfg.fileId } : null;
+    try { if (!file) file = await Drive.findFile(); } catch (e) { await dialog({ title: 'Drive error', msg: String(e.message || e) }); return; }
+    if (!file) { await dialog({ title: 'No backup in Drive', msg: 'There is no My Money backup in this Google account yet.' }); return; }
+    let obj;
+    try { toast('Downloading…'); obj = JSON.parse(await Drive.download(file.id)); }
+    catch (e) {
+      if (e.code === 'NOTFOUND' && driveCfg) { await saveDriveCfg({ fileId: null }); await dialog({ title: 'Backup not found', msg: 'The backup file was deleted from Drive. A new one will be made at the next change.' }); return; }
+      await dialog({ title: 'Can’t download the backup', msg: String(e.message || e) }); return;
+    }
+    let text = null;
+    if (obj && obj.encrypted && obj.format === 'enc1') {
+      for (;;) {
+        const p = await passDialog({ title: 'Backup passcode', msg: 'Enter the passcode this Drive backup was made with.', ok: 'Decrypt' }); if (!p) return;
+        try { toast('Decrypting…'); text = await Vault.decryptBackup(obj, p); break; }
+        catch (e) { if (e.code !== 'BADKEY') throw e; await dialog({ title: 'Wrong passcode · รหัสไม่ถูกต้อง', msg: 'That passcode doesn’t open this backup. Nothing was changed.' }); }
+      }
+    } else text = JSON.stringify(obj);
+    let parsed; try { parsed = parseBackup(text); } catch (e) { await dialog({ title: 'Can’t restore', msg: e.message }); return; }
+    const mlN = parsed.ml ? parsed.ml.items.length : 0, acN = parsed.ml ? parsed.ml.accounts.length : 0, mmN = parsed.mm ? parsed.mm.items.length : 0;
+    const pics = (parsed.ml ? parsed.ml.items.reduce((s, i) => s + photoCount(i), 0) : 0) + (parsed.mm ? parsed.mm.items.reduce((s, i) => s + photoCount(i), 0) : 0);
+    const when = parsed.exportedAt ? fullStamp(Date.parse(parsed.exportedAt)) : 'unknown date';
+    const go = await dialog({ title: 'Replace with the Drive backup?', msg: `Backup from ${when}:\n• Main Money: ${acN} account${acN === 1 ? '' : 's'}, ${mlN} entr${mlN === 1 ? 'y' : 'ies'}\n• Money Mother: ${mmN} item${mmN === 1 ? '' : 's'}\n• ${pics} photo${pics === 1 ? '' : 's'}\n\nEverything on this phone is replaced by the backup.`,
+      buttons: [{ label: 'Replace with backup', value: true, danger: true }, { label: 'Cancel', value: false }] });
+    if (!go) return;
+    await replaceAllWith(parsed, 'Restore from Drive');
+    toast('Restored from Drive ✓');
+    if (afterSetup && driveCfg) await saveDriveCfg({ lastAt: Date.now(), lastStatus: 'ok' });
+    renderDrive();
+  }
+  // Drive backups made with the app passcode follow a passcode change (the next upload uses the new one)
+  async function driveFollowPasscode(p) {
+    if (!driveCfg || driveCfg.mode !== 'app') return;
+    await saveDriveCfg({ key: await Vault.deriveBackupKey(p) }); scheduleDrive(1000);
+  }
+
+  // ---------- v1.7.1 history screen ----------
+  let histKey = 'total';
+  function openHistory(key) {
+    if (!hist) return;
+    histKey = key || 'total'; renderHistory(); showSheetEl($('#histsheet'));
+  }
+  function closeHistory() { hideSheetEl($('#histsheet')); }
+  function histTitle(k) { return k === 'pending' ? 'Pending history · ประวัติยอดรอรับ' : 'Balance history · ประวัติยอดเงิน'; }
+  function histChartSVG(pts, key) {
+    if (!pts.length) return '<div class="histempty">No history yet</div>';
+    const W = 340, H = 150, P = { l: 6, r: 6, t: 14, b: 22 };
+    const t0 = pts[0].ts, t1 = Math.max(Date.now(), pts[pts.length - 1].ts), span = Math.max(1, t1 - t0);
+    let lo = Math.min(...pts.map(p => p.v)), hi = Math.max(...pts.map(p => p.v)); if (lo === hi) { lo -= 100; hi += 100; }
+    const x = t => P.l + (W - P.l - P.r) * (t - t0) / span, y = v => P.t + (H - P.t - P.b) * (1 - (v - lo) / (hi - lo));
+    let d = ''; pts.forEach((p, i) => { d += (i ? `H${x(p.ts).toFixed(1)}V${y(p.v).toFixed(1)}` : `M${x(p.ts).toFixed(1)} ${y(p.v).toFixed(1)}`); });
+    d += `H${x(t1).toFixed(1)}`;
+    const dots = pts.length <= 60 ? pts.map(p => `<circle cx="${x(p.ts).toFixed(1)}" cy="${y(p.v).toFixed(1)}" r="2.6"/>`).join('') : '';
+    const fd = ts => new Date(ts).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+    return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(key)} over time"><path class="hc-line" d="${d}"/><g class="hc-dot">${dots}</g>
+      <text x="${P.l}" y="10" class="hc-t">${esc(mlm(hi))}</text><text x="${P.l}" y="${H - P.b + 2 - 4}" class="hc-t">${esc(mlm(lo))}</text>
+      <text x="${P.l}" y="${H - 6}" class="hc-t">${esc(fd(t0))}</text><text x="${W - P.r}" y="${H - 6}" class="hc-t" text-anchor="end">${esc(fd(t1))}</text></svg>`;
+  }
+  function renderHistory() {
+    if (!hist) return;
+    const sel = $('#hist-filter');
+    const known = new Map(); for (const r of hist) if (r.kind === 'acct') known.set(r.acct, r.name);
+    for (const a of state.ml.accounts) known.set(a.id, a.name);
+    const opts = [['total', 'Total · รวม (accounts + pending)'], ['bank', 'All accounts · ทุกบัญชี'], ...[...known].map(([id, n]) => [id, '🏦 ' + n]), ['pending', '⏳ Pending · รอรับ']];
+    if (!opts.some(o => o[0] === histKey)) histKey = 'total';
+    sel.innerHTML = opts.map(([v, l]) => `<option value="${esc(v)}"${v === histKey ? ' selected' : ''}>${esc(l)}</option>`).join('');
+    $('#hist-title').textContent = histTitle(histKey);
+    const pts = L.histSeries(hist, histKey);
+    const now = pts.length ? pts[pts.length - 1].v : 0;
+    $('#hist-now').innerHTML = `<span>${histKey === 'pending' ? 'Pending now' : histKey === 'total' ? 'Total now' : histKey === 'bank' ? 'Accounts now' : 'Balance now'}</span><b>${esc(mlm(now))}</b>`;
+    $('#hist-pend').hidden = histKey !== 'pending';
+    $('#hist-pend').textContent = 'Pending updated · อัปเดตรอรับ ' + stampText(lastPendingTs());
+    $('#hist-chart').innerHTML = histChartSVG(pts, histKey);
+    const rows = hist.filter(r => histKey === 'total' ? true : histKey === 'bank' ? r.kind === 'acct' : histKey === 'pending' ? r.kind === 'pending' : r.acct === histKey).slice().reverse();
+    let html = '', day = '';
+    const today = L.dayKey(Date.now()), yest = L.dayKey(Date.now() - 864e5);
+    for (const r of rows.slice(0, 500)) {
+      const k = L.dayKey(r.ts);
+      if (k !== day) { day = k; html += `<div class="hday">${k === today ? 'Today · วันนี้' : k === yest ? 'Yesterday · เมื่อวาน' : esc(new Date(r.ts).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }))}</div>`; }
+      const ch = r.change || 0, cls = ch > 0 ? 'up' : ch < 0 ? 'down' : '';
+      const tm = new Date(r.ts).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+      const fromTo = r.old === null ? 'start ' + mlm(r.new || 0) : r.new === null ? mlm(r.old) + ' → removed' : mlm(r.old) + ' → ' + mlm(r.new);
+      html += `<div class="hrow" data-hid="${esc(r.id)}"><div class="hl"><b>${r.kind === 'pending' ? '⏳ ' : '🏦 '}${esc(r.name)}</b><small>${esc(r.cause || '')} · ${esc(tm)}</small></div>
+        <div class="hr"><span class="hch ${cls}">${r.old === null ? '' : (ch > 0 ? '+' : ch < 0 ? '−' : '±') + esc(mlm(Math.abs(ch)))}</span><small>${esc(fromTo)}</small></div></div>`;
+    }
+    $('#hist-list').innerHTML = html || '<div class="histempty">No changes yet</div>';
+  }
+
+  // ---------- v1.7.1 move an entry between Main Money and Money Mother ----------
+  async function moveItem() {
+    if (!mlform || !mlform.editing) return;
+    const it = findItem(mlform.editing.id) || mlform.editing, from = mlform.book || bookOf(it.id), to = from === 'mm' ? 'ml' : 'mm';
+    const pics = photoCount(it);
+    const toName = to === 'mm' ? 'Money Mother · เงินแม่' : 'Main Money · เงินหลัก';
+    const st = to === 'mm' ? 'Owed · แม่ค้าง' : 'Pending · รอรับ';
+    const bankNote = from === 'ml' && it.status === 'received' && it.addedToBank ? `\n\nIt was added to ${primaryAccount() ? primaryAccount().name : 'the bank'} when received.` : '';
+    const buttons = [{ label: `Move to ${to === 'mm' ? 'Money Mother' : 'Main Money'}`, value: 'move', bold: true }];
+    if (bankNote) buttons.unshift({ label: `Move + subtract ${mlm(it.amount)} from bank`, value: 'move-sub', bold: true }), buttons[1].bold = false;
+    buttons.push({ label: 'Cancel', value: null });
+    const a = await dialog({ title: `Move to ${toName}?`, msg: `${it.name} · ${mlm(it.amount)}${it.date ? ' · ' + fmtDate(it.date) : ''}\nPhotos (${pics}), date, note and amount are kept. Status there: ${st}.${from === 'ml' ? '' : '\nMain Money entries don’t belong to an account, so no balance changes.'}${bankNote}`, buttons, stack: true });
+    if (!a) return;
+    const now = Date.now(), list = bookItems(to);
+    const moved = Object.assign({}, it, {
+      id: (to === 'mm' ? 'm-' : 'i-') + L.uid(), status: 'pending', receivedAt: null, addedToBank: false, groupId: null,
+      order: list.length ? Math.max(...list.map(i => i.order || 0)) + 1 : 0, updated: now, movedFrom: from, movedAt: now,
+      photo: it.photo || null, thumb: it.thumb || null, morePhotos: morePhotosOf(it).slice()
+    });
+    if (to === 'mm' && !moved.date) moved.date = L.dayKey(it.created || now); // Mom items show the spend date
+    if (to === 'mm') moved.tag = ''; // tags are a Main Money thing
+    cause(to === 'mm' ? `Moved to Money Mother: ${it.name}` : `Moved from Money Mother: ${it.name}`);
+    if (a === 'move-sub') await mlAdjustPrimary(-it.amount, now);
+    await putBookItem(to, moved);          // write the new copy first: never lose the item if something stops halfway
+    await deleteBookItem(from, it.id);
+    closeMLSheet(); haptic(); toast(to === 'mm' ? 'Moved to Money Mother' : 'Moved to Main Money'); requestPersist();
+    setView(to === 'mm' ? 'mother' : 'moneyleft');
+  }
+  function bindDrive() {
+    $('#drive-toggle').addEventListener('click', async () => {
+      const t = $('#drive-toggle'); if (t.disabled) return; t.disabled = true;
+      try { if (driveCfg) await driveTurnOff(); else await driveSetup(); }
+      catch (e) { dialog({ title: 'Drive error', msg: String(e && e.message || e) }); }
+      finally { t.disabled = false; renderDrive(); }
+    });
+    $('#btn-drive-now').addEventListener('click', () => runDriveBackup().catch(() => {}));
+    $('#btn-drive-reconnect').addEventListener('click', () => driveReconnect().catch(e => dialog({ title: 'Drive error', msg: String(e && e.message || e) })));
+    $('#btn-drive-restore').addEventListener('click', () => driveRestore(false).catch(e => dialog({ title: 'Restore failed', msg: String(e && e.message || e) })));
+    window.addEventListener('online', () => { if (driveCfg && driveDirty && !driveNeedsAuth) scheduleDrive(1000); });
+    // iOS may close a home-screen app soon after it is hidden: send a pending change right away
+    document.addEventListener('visibilitychange', () => { if (document.hidden && driveCfg && driveDirty && !driveBusy && !driveNeedsAuth) runDriveBackup().catch(() => {}); });
+  }
+
   // ---------- storage persistence ----------
   async function requestPersist() {
     try {
@@ -1552,7 +1873,7 @@
     $('#catlist').addEventListener('click', ev => { const r = ev.target.closest('[data-cat]'); if (!r) return; state.filter = { month: state.sumMonth, category: r.dataset.cat, query: '' }; setView('moneyleft'); });
     // sheet
     $('#sheet-cancel').addEventListener('click', closeSheet);
-    $('#scrim').addEventListener('click', () => { if (acform) closeAcctSheet(); else if (mlform) closeMLSheet(); else closeSheet(); });
+    $('#scrim').addEventListener('click', () => { if (acform) closeAcctSheet(); else if (mlform) closeMLSheet(); else if (!$('#histsheet').hidden) closeHistory(); else closeSheet(); });
     $('#sheet-save').addEventListener('click', saveForm);
     $('#form').addEventListener('submit', ev => { ev.preventDefault(); saveForm(); });
     $('#f-amount').addEventListener('input', ev => {
@@ -1603,6 +1924,8 @@
     $('#btn-wipe').addEventListener('click', async () => {
       if (!(await confirmDlg('Erase all data?', 'Your bank balance, entries, photos, snapshots and settings on this device will be deleted. Export a backup first if you might need it.', 'Erase', true))) return;
       if (!(await confirmDlg('Are you sure?', 'This cannot be undone.', 'Erase everything', true))) return;
+      driveEpoch++; clearTimeout(driveTimer); driveCfg = null; driveDirty = false; driveNeedsAuth = false; Drive.disconnect();
+      hist = null; histBase = null; histCause = null;
       await DB.clearAll(); cryptoMeta = null; currentDEK = null; lockOpen = false; thumbURLs.forEach(v => revokeLater(v.url)); thumbURLs.clear();
       await loadAll(); state.filter = { month: 'all', category: 'all', query: '' }; toast('All data erased'); render();
     });
@@ -1639,7 +1962,7 @@
   }
   async function init() {
     if (!(await checkVersions())) return;
-    bind(); bindSecurity();
+    bind(); bindSecurity(); bindDrive();
     try { cryptoMeta = await DB.loadCryptoMeta(); } catch (e) { console.error(e); }
     let openKey = null;
     if (cryptoMeta) { try { const raw = await DB.getOpenKey(); if (raw) openKey = await Vault.importRawKey(raw); } catch (e) { console.error(e); openKey = null; } }
@@ -1669,6 +1992,6 @@
   }
 
   // exposed for automated tests only
-  window.__app = { get lastExport() { return lastExport; }, exportReport, state, processPhoto, parseBackup, buildBackup, importBackup, render, mlCurrentText, lockNow, DB: () => DB, get stamps() { return stamps; }, reconcileStamps };
+  window.__app = { get hist() { return hist; }, openHistory, get driveCfg() { return driveCfg; }, runDriveBackup, get lastExport() { return lastExport; }, exportReport, state, processPhoto, parseBackup, buildBackup, importBackup, render, mlCurrentText, lockNow, DB: () => DB, get stamps() { return stamps; }, reconcileStamps };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 })();

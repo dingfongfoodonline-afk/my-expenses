@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="app-version" content="1.6.4">
+<meta name="app-version" content="1.7.1">
 <title>My Expenses</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -14,7 +14,7 @@
 <meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
 <meta name="description" content="Private expense tracker. Your data stays on this device.">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline' https://accounts.google.com; script-src 'self' https://accounts.google.com https://apis.google.com; connect-src 'self' https://www.googleapis.com https://oauth2.googleapis.com https://accounts.google.com; frame-src https://accounts.google.com; font-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
@@ -66,7 +66,7 @@
   <!-- MONEY LEFT -->
   <section class="view active" id="view-moneyleft" aria-label="Main Money">
     <header class="largetitle">
-      <div class="stamps" id="ml-stamps" hidden><span class="stamp-l">Balance updated · ยอดอัปเดต <b data-stamp="bal">—</b></span><span class="stamp-l">Other update · อัปเดตอื่นๆ <b data-stamp="other">—</b></span></div>
+      <div class="stamps tap" id="ml-stamps" role="button" aria-label="Open balance history" hidden><span class="stamp-l">Balance updated · ยอดอัปเดต <b data-stamp="bal">—</b></span><span class="stamp-l">Other update · อัปเดตอื่นๆ <b data-stamp="other">—</b></span><span class="stamp-l" id="ml-pend-stamp">Pending updated · อัปเดตรอรับ <b data-stamp="pend">—</b></span><span class="stamp-l histlink">📈 History ›</span></div>
       <div class="titlerow">
         <div><h1>Main Money</h1><div class="subtitle">เงินคงเหลือ</div></div>
         <button class="iconbtn" id="ml-copy-top" aria-label="Copy as text"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/></svg></button>
@@ -82,13 +82,13 @@
 
     <div class="mlcard">
       <div class="bc-label">Total · รวม</div>
-      <div class="bc-amount" id="ml-total">฿0</div>
+      <div class="bc-amount tap" id="ml-total" role="button" aria-label="Total, open balance history">฿0</div>
       <div class="bc-row">
         <button class="bc-col btn" id="ml-bank-btn"><div class="mlcol"><div class="bc-sub" id="ml-bank-lbl">🏦 Bank · เงินในธนาคาร</div><div class="bc-val" id="ml-bank">฿0</div><div class="bc-tiny" id="ml-bank-upd">Tap to set</div></div></button>
-        <div class="bc-col"><div class="mlcol"><div class="bc-sub">⏳ Pending · รอรับ</div><div class="bc-val" id="ml-pending">฿0</div><div class="bc-tiny" id="ml-pending-n">0 items</div></div></div>
+        <button class="bc-col btn" id="ml-pending-col" aria-label="Pending, open pending history"><div class="mlcol"><div class="bc-sub">⏳ Pending · รอรับ</div><div class="bc-val" id="ml-pending">฿0</div><div class="bc-tiny" id="ml-pending-n">0 items</div></div></button>
       </div>
       <div class="accts" id="ml-accts" hidden></div>
-      <div class="cardbtns"><button class="addacct" id="ml-add-acct">＋ Add account · เพิ่มบัญชี</button><button class="addacct" id="ml-paste-sms">📋 Paste KBank SMS</button></div>
+      <div class="cardbtns"><button class="addacct" id="ml-add-acct">＋ Add account · เพิ่มบัญชี</button><button class="addacct" id="ml-paste-sms">📋 Paste KBank SMS</button><button class="addacct" id="ml-history">📈 Balance history · ประวัติ</button></div>
     </div>
 
     <div class="mlactions three">
@@ -217,6 +217,18 @@
     </div>
     <div class="group-f" id="backup-note">Your data lives only in this phone's browser storage. Export a backup now and then (photos are included) and save it to Files or iCloud Drive.</div>
 
+    <div class="group-h">Google Drive backup</div>
+    <div class="group">
+      <button class="row switchrow" id="drive-toggle" role="switch" aria-checked="false"><span class="row-l">☁️ Auto-backup to Drive<small id="drive-sub">Off</small></span><span class="sw" aria-hidden="true"><i></i></span></button>
+      <div class="row drive-on-row" hidden><span class="row-l">Last Drive backup</span><span class="row-r" id="drive-last">—</span></div>
+      <div class="row lockwarn" id="drive-err" hidden></div>
+      <button class="row link" id="btn-drive-reconnect" hidden><span class="row-l">🔄 Reconnect Drive</span></button>
+      <button class="row link drive-on-row" id="btn-drive-now" hidden><span class="row-l">Back up now</span></button>
+      <button class="row link" id="btn-drive-restore"><span class="row-l">Restore from Drive…</span><span class="chev">›</span></button>
+    </div>
+    <div class="group-f">One encrypted file (my-expenses-backup.json) in your Google Drive, replaced about 5 seconds after each change. Google only stores the encrypted file.</div>
+
+
     <div class="group-h">Storage</div>
     <div class="group">
       <div class="row" id="st-count-row" hidden><span class="row-l">Older expense entries</span><span class="row-r" id="st-count">0</span></div>
@@ -224,7 +236,7 @@
       <div class="row"><span class="row-l">Space used</span><span class="row-r" id="st-used">—</span></div>
       <div class="row"><span class="row-l">Persistent storage</span><span class="row-r" id="st-persist">—</span></div>
     </div>
-    <div class="group-f">No accounts, no servers, no tracking. Nothing ever leaves this device unless you export it.</div>
+    <div class="group-f">No accounts, no servers, no tracking. Nothing leaves this device unless you export it or turn on Drive backup (encrypted).</div>
 
     <div class="group">
       <button class="row danger" id="btn-wipe"><span class="row-l">Erase all data</span></button>
@@ -350,6 +362,7 @@
       <div class="photo-more" id="ml-photo-more" hidden></div>
       <input type="file" id="ml-photo" accept="image/*" multiple hidden>
     </div>
+    <button type="button" class="movebtn" id="ml-move" hidden>↔ Move</button>
     <button type="button" class="deletebtn" id="ml-delete" hidden>Delete item · ลบรายการ</button>
     <div class="meta" id="ml-meta"></div>
   </form>
@@ -383,6 +396,23 @@
     <button type="button" class="pastebtn" id="ac-paste">📋 Paste balance from KBank SMS · วางยอดจาก SMS</button>
     <div class="meta" id="ac-meta"></div>
   </form>
+</div>
+
+<!-- v1.7.1 Balance / pending history -->
+<div class="sheet" id="histsheet" role="dialog" aria-modal="true" aria-labelledby="hist-title" hidden>
+  <div class="grabber"></div>
+  <div class="sheet-head">
+    <button class="textbtn" id="hist-close">Close</button>
+    <div class="sheet-title" id="hist-title">Balance history · ประวัติยอดเงิน</div>
+    <div class="headright"></div>
+  </div>
+  <div class="sheet-body">
+    <div class="group"><select class="fullinput" id="hist-filter" aria-label="Show"></select></div>
+    <div class="histnow" id="hist-now"></div>
+    <div class="histpend" id="hist-pend" hidden></div>
+    <div class="histchart" id="hist-chart"></div>
+    <div id="hist-list"></div>
+  </div>
 </div>
 
 <!-- Photo viewer -->
@@ -431,6 +461,7 @@
 <script src="vault.js"></script>
 <script src="db.js"></script>
 <script src="export.js"></script>
+<script src="drive.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
