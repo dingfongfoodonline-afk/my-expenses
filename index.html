@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="app-version" content="1.7.1">
+<meta name="app-version" content="1.8.0">
 <title>My Expenses</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -192,13 +192,13 @@
     <div class="group-h">Security · ความปลอดภัย</div>
     <div class="group">
       <button class="row switchrow" id="lock-toggle" role="switch" aria-checked="false"><span class="row-l">🔐 App lock · ล็อกแอป<small id="lock-sub">Off</small></span><span class="sw" aria-hidden="true"><i></i></span></button>
+      <button class="row link masterrow unset" id="btn-change-pass"><span class="row-l">🔑 <span class="ml-t">Create master password</span> · รหัสหลัก<small id="master-sub">Not set</small></span><span class="row-r" id="master-act">Create ›</span></button>
       <div class="row lockwarn" id="lock-off-warn" hidden>⚠️ Lock is off: anyone with this phone can open the app.</div>
     </div>
     <div class="group" id="sec-on" hidden>
       <div class="row"><span class="row-l">Encryption</span><span class="row-r" id="sec-enc">On · AES-256</span></div>
       <div class="row"><span class="row-l">Face ID unlock</span><span class="row-r" id="sec-face">—</span></div>
       <button class="row link" id="btn-lock-now"><span class="row-l">Lock now</span></button>
-      <button class="row link" id="btn-change-pass"><span class="row-l">Change passcode</span></button>
       <button class="row link" id="btn-face-enroll"><span class="row-l">Set up Face ID again</span></button>
     </div>
     <div class="group-f" id="sec-note"></div>

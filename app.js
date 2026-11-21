@@ -4,7 +4,7 @@
   const L = window.Logic;
   const $ = (s, el) => (el || document).querySelector(s);
   const $$ = (s, el) => Array.from((el || document).querySelectorAll(s));
-  const APP_VERSION = '1.7.1';
+  const APP_VERSION = '1.8.0';
 
   const state = {
     entries: [],
@@ -1406,8 +1406,9 @@
         (o.confirm ? `<input class="dlg-input" type="password" data-f="p2" placeholder="Repeat passcode" autocomplete="new-password">` : '') + `<div class="dlg-err" hidden></div>`;
       box.addEventListener('input', () => { const e = box.querySelector('.dlg-err'); e.hidden = true; e.textContent = ''; });
       const run = async () => {
-        const v = await dialog({ title: o.title, msg: o.msg || '', extra: box, buttons: [{ label: 'Cancel', value: false }, { label: o.ok || 'Continue', value: true, bold: true }] });
+        const v = await dialog({ title: o.title, msg: o.msg || '', extra: box, buttons: [{ label: 'Cancel', value: false }, ...(o.alt ? [{ label: o.alt, value: 'alt' }] : []), { label: o.ok || 'Continue', value: true, bold: true }] });
         if (!v) return resolve(null);
+        if (v === 'alt') return resolve({ alt: true });
         const g = f => { const i = box.querySelector(`[data-f="${f}"]`); return i ? i.value : ''; };
         const err = m => { const e = box.querySelector('.dlg-err'); e.textContent = m; e.hidden = false; run(); };
         if (g('p1').length < 6) return err('Passcode must be at least 6 characters.');
@@ -1422,8 +1423,9 @@
     $('#lock-err').textContent = ''; $('#lock-pass').value = '';
     const hasFace = !!(cryptoMeta && cryptoMeta.prf);
     $('#lock-face').hidden = !hasFace;
-    $('#lock-passform').hidden = hasFace; $('#lock-usepass').hidden = !hasFace;
-    $('#lock-note').textContent = hasFace ? '' : (cryptoMeta && cryptoMeta.prfUnsupported ? 'Face ID unlock isn’t supported on this device — use your passcode.' : '');
+    const hasPass = !!(cryptoMeta && cryptoMeta.passcode && cryptoMeta.passcode.wrapped);
+    $('#lock-passform').hidden = hasFace || !hasPass; $('#lock-usepass').hidden = !hasFace || !hasPass;
+    $('#lock-note').textContent = hasFace ? (hasPass ? '' : 'No master password yet: after unlocking, create one in Settings → Master password.') : (cryptoMeta && cryptoMeta.prfUnsupported ? 'Face ID unlock isn’t supported on this device — use your passcode.' : '');
     if (hasFace && autoFace) setTimeout(() => tryFaceUnlock(true), 250); else if (!hasFace) setTimeout(() => $('#lock-pass').focus(), 100);
   }
   async function unlockWith(dek) {
@@ -1444,6 +1446,7 @@
   async function passUnlock(ev) {
     ev.preventDefault();
     const btn = $('#lock-passform button'); btn.disabled = true; $('#lock-err').textContent = 'Checking…';
+    if (!(cryptoMeta && cryptoMeta.passcode)) { $('#lock-err').textContent = 'No master password is set — use Face ID.'; btn.disabled = false; return; }
     try { await unlockWith(await Vault.unwrapWithPasscode(cryptoMeta.passcode, $('#lock-pass').value)); }
     catch (e) { $('#lock-err').textContent = e && e.code === 'BADKEY' ? 'Wrong passcode · รหัสไม่ถูกต้อง' : String(e && e.message || e); $('#lock-pass').select(); }
     finally { btn.disabled = false; }
@@ -1494,11 +1497,61 @@
       buttons: [{ label: 'Export encrypted backup', value: true, bold: true }, { label: 'Later', value: false }] });
     if (exp) exportBackup('enc');
   }
+  // ---------- v1.7.2 master password (the passcode that wraps the data key) ----------
+  // Root cause of "can't turn the lock off": turning off and changing both required the old passcode, and there was
+  // no way forward when it was forgotten or missing (Face ID users rarely type it). Now:
+  //  - Create master password when none exists (after a Face ID check if Face ID is set up),
+  //  - Change it with the current one OR a fresh Face ID check,
+  //  - otherwise a clear export -> erase -> restore way out (the app is open, so the data can always be exported).
+  const hasMaster = () => !!(cryptoMeta && cryptoMeta.passcode && cryptoMeta.passcode.wrapped);
+  async function sameKey(a, b) { try { return (await Vault.exportRawKey(a)) === (await Vault.exportRawKey(b)); } catch (_) { return false; } }
+  async function faceVerify() { // a fresh Face ID check that must give the same data key as the open vault
+    if (!cryptoMeta || !cryptoMeta.prf) return false;
+    try { return await sameKey(await Vault.unwrapWithFaceID(cryptoMeta.prf), currentDEK); }
+    catch (e) { return false; }
+  }
+  async function setMaster(np) {
+    cryptoMeta = Object.assign({}, cryptoMeta, { passcode: await Vault.wrapWithPasscode(currentDEK, np) });
+    await DB.setCryptoMeta(cryptoMeta); await driveFollowPasscode(np); renderSettings();
+  }
+  async function noWayOut(title) {
+    const a = await dialog({ title: title || 'Can’t change the master password',
+      msg: 'Without the current master password or Face ID it can’t be changed. Your data is still open on this phone, so nothing is lost:\n\n1. Export backup (choose an encrypted backup with a NEW backup passcode).\n2. Settings → Erase all data.\n3. Restore from backup with that file, then turn App lock on with a new master password.',
+      buttons: [{ label: 'Export backup now', value: 'export', bold: true }, { label: 'Close', value: null }], stack: true });
+    if (a === 'export') await exportBackup(null);
+  }
+  // returns the new master password, or null
+  async function createMaster(why) {
+    if (!DB.isEncrypted()) { await encryptSetup(); return hasMaster() ? true : null; } // no vault yet: the master password is set while turning the lock on
+    if (!currentDEK) return null;
+    if (cryptoMeta.prf) {
+      const go = await dialog({ title: 'Create master password · สร้างรหัสหลัก', msg: (why ? why + '\n\n' : '') + 'First confirm it’s you with Face ID.', buttons: [{ label: 'Verify with Face ID', value: true, bold: true }, { label: 'Cancel', value: false }] });
+      if (!go) return null;
+      if (!(await faceVerify())) { await dialog({ title: 'Face ID didn’t confirm', msg: 'No master password was created. Try again.' }); return null; }
+    }
+    const np = await passDialog({ title: 'Create master password · สร้างรหัสหลัก', msg: (why && !cryptoMeta.prf ? why + '\n' : '') + 'Min 6 characters. You need it to turn the lock off, to unlock without Face ID, and to restore encrypted backups.', confirm: true, ok: 'Create' });
+    if (!np) return null;
+    await setMaster(np); toast('Master password created 🔑'); return np;
+  }
   async function changePasscode() {
-    const r = await passDialog({ title: 'Change passcode', current: true, confirm: true, ok: 'Change' }); if (!r) return;
-    try { await Vault.unwrapWithPasscode(cryptoMeta.passcode, r.current); } catch (_) { await dialog({ title: 'Wrong passcode', msg: 'The current passcode is not correct.' }); return; }
-    cryptoMeta = Object.assign({}, cryptoMeta, { passcode: await Vault.wrapWithPasscode(currentDEK, r.passcode) });
-    await DB.setCryptoMeta(cryptoMeta); await driveFollowPasscode(r.passcode); toast('Passcode changed'); renderSettings();
+    if (!hasMaster()) { await createMaster(); return; }
+    const r = await passDialog({ title: 'Change master password · เปลี่ยนรหัสหลัก', msg: cryptoMeta.prf ? 'Forgot it? Use Face ID instead.' : '', current: true, confirm: true, ok: 'Change', alt: cryptoMeta.prf ? 'Forgot it? Verify with Face ID' : null }); if (!r) return;
+    if (r.alt) {
+      if (!(await faceVerify())) { await noWayOut('Face ID didn’t confirm'); return; }
+      const np = await passDialog({ title: 'New master password', msg: 'Face ID confirmed. Min 6 characters.', confirm: true, ok: 'Change' }); if (!np) return;
+      await setMaster(np); toast('Master password changed'); return;
+    }
+    try { await Vault.unwrapWithPasscode(cryptoMeta.passcode, r.current); }
+    catch (_) {
+      const a = await dialog({ title: 'Wrong passcode', msg: 'The current master password is not correct.', buttons: [...(cryptoMeta.prf ? [{ label: 'Verify with Face ID instead', value: 'face', bold: true }] : [{ label: 'I forgot it', value: 'forgot' }]), { label: 'OK', value: null, bold: !cryptoMeta.prf }] });
+      if (a === 'face') {
+        if (!(await faceVerify())) { await noWayOut('Face ID didn’t confirm'); return; }
+        const np = await passDialog({ title: 'New master password', msg: 'Face ID confirmed. Min 6 characters.', confirm: true, ok: 'Change' }); if (!np) return;
+        await setMaster(np); toast('Master password changed');
+      } else if (a === 'forgot') await noWayOut();
+      return;
+    }
+    await setMaster(r.passcode); toast('Passcode changed');
   }
   async function reenrollFace() {
     if (!(await Vault.platformAvailable())) { await dialog({ title: 'Face ID unavailable', msg: 'This device has no platform authenticator available to this app.' }); return; }
@@ -1511,17 +1564,32 @@
   }
   // Turning the lock OFF needs the passcode (Face ID alone is not enough).
   async function lockOff() {
+    if (!hasMaster()) {
+      const np = await createMaster('To turn the lock off you need a master password. You don’t have one yet.');
+      if (!np) return;
+      await DB.setOpenKey(await Vault.exportRawKey(currentDEK)); lockOpen = true;
+      renderSettings(); toast('App lock off · opens without passcode'); return;
+    }
     const p = await passDialog({ title: 'Turn off App lock? · ปิดล็อกแอป', msg: 'Enter your passcode to turn the lock off.\n⚠️ Anyone with this phone will then be able to open the app.', ok: 'Turn off' });
     if (!p) return;
     let dek;
     try { dek = await Vault.unwrapWithPasscode(cryptoMeta.passcode, p); }
-    catch (e) { await dialog({ title: 'Wrong passcode · รหัสไม่ถูกต้อง', msg: 'The lock stays on.' }); return; }
+    catch (e) {
+      const a = await dialog({ title: 'Wrong passcode · รหัสไม่ถูกต้อง', msg: 'The lock stays on.' + (cryptoMeta.prf ? '\nForgot your master password? Change it with Face ID, then turn the lock off.' : ''),
+        buttons: cryptoMeta.prf ? [{ label: 'Change it with Face ID', value: 'face', bold: true }, { label: 'OK', value: null }] : [{ label: 'OK', value: null, bold: true }, { label: 'I forgot it', value: 'forgot' }] });
+      if (a === 'face') {
+        if (!(await faceVerify())) { await noWayOut('Face ID didn’t confirm'); return; }
+        const np = await passDialog({ title: 'New master password', msg: 'Face ID confirmed. Min 6 characters. Then the lock can be turned off with it.', confirm: true, ok: 'Change' }); if (np) { await setMaster(np); toast('Master password changed · now turn the lock off'); }
+      } else if (a === 'forgot') await noWayOut('Forgot the master password?');
+      return;
+    }
     await DB.setOpenKey(await Vault.exportRawKey(dek));
     currentDEK = dek; DB.setKey(dek); lockOpen = true;
     renderSettings(); toast('App lock off · opens without passcode');
   }
   // Turning it back ON with an existing passcode: confirm the passcode (so nobody locks themselves out), then drop the stored key.
   async function lockOnAgain() {
+    if (!hasMaster()) { if (!(await createMaster('Turning the lock on needs a master password.'))) return; await DB.setOpenKey(null); lockOpen = false; renderSettings(); toast('App lock on 🔐'); return; }
     const p = await passDialog({ title: 'Turn on App lock · เปิดล็อกแอป', msg: 'Enter your passcode to turn the lock back on.', ok: 'Turn on' });
     if (!p) return;
     try { await Vault.unwrapWithPasscode(cryptoMeta.passcode, p); }
@@ -1556,14 +1624,17 @@
   function renderSecurity() {
     const enc = DB.isEncrypted(), on = enc && !lockOpen;
     const t = $('#lock-toggle'); t.setAttribute('aria-checked', on ? 'true' : 'false');
-    $('#lock-sub').textContent = on ? 'On · Face ID or passcode to open' : (enc ? 'Off · passcode kept, needed to change this' : 'Off');
+    $('#lock-sub').textContent = on ? (hasMaster() ? 'On · Face ID or master password to open' : 'On · Face ID to open') : (enc ? 'Off · master password needed to change this' : 'Off');
     $('#lock-off-warn').hidden = !(enc && lockOpen);
     $('#sec-on').hidden = !enc; $('#btn-lock-now').hidden = !on;
     $('#sec-enc').textContent = on ? 'On · AES-256' : 'Data encrypted · key kept on this phone';
     if (enc) $('#sec-face').textContent = cryptoMeta && cryptoMeta.prf ? 'On ✓' : (cryptoMeta && cryptoMeta.prfUnsupported ? 'Not supported' : 'Off');
+    $('#master-sub').textContent = hasMaster() ? 'Set ✓' : (enc ? 'Not set ⚠️' : 'Not set'); $('#master-act').textContent = hasMaster() ? 'Change ›' : 'Create ›';
+    $('#btn-change-pass').classList.toggle('unset', !hasMaster());
+    $('#btn-change-pass .ml-t').textContent = hasMaster() ? 'Change master password' : 'Create master password';
     $('#btn-face-enroll .row-l').textContent = cryptoMeta && cryptoMeta.prf ? 'Set up Face ID again' : 'Set up Face ID';
-    $('#sec-note').textContent = on ? 'Data and photos are encrypted with AES-256-GCM. The key is only in memory while unlocked; the app locks after 60 s in the background. Forgetting the passcode and losing Face ID = data unrecoverable.'
-      : enc ? 'Turning the lock off or on needs your passcode (Face ID is not enough).'
+    $('#sec-note').textContent = on ? 'Data and photos are encrypted with AES-256-GCM. The key is only in memory while unlocked; the app locks after 60 s in the background. Forgetting the master password and losing Face ID = data unrecoverable.' + (hasMaster() ? '' : ' ⚠️ No master password yet: create one so you can turn the lock off and restore backups.')
+      : enc ? 'Turning the lock off or on needs your master password (Face ID is not enough).'
       : 'Turn on to set a passcode (and optionally Face ID). Your data and photos are then encrypted on this phone.';
   }
   function bindSecurity() {

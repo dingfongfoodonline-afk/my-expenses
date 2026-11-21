@@ -89,3 +89,10 @@ Files: index.html, style.css, logic.js (pure logic), db.js (IndexedDB), app.js (
 - **Move between Main Money and Money Mother:** in an item's edit sheet, tap "↔ Move to Money Mother" or "↔ Move to Main Money". Photos, date, note and amount are kept, and the status becomes Owed or Pending.
   - Main Money entries don't belong to an account, so no account question is asked.
   - If a received Main entry had been added to the bank, you can subtract it while moving.
+
+## Master password (v1.7.2)
+Settings → Security → **🔑 Master password · รหัสหลัก**.
+- **Create master password** appears when none is set (e.g. a phone that only ever used Face ID). Face ID confirms it's you, then you type the new password twice.
+- Turning **App lock off** needs the master password. If there isn't one yet, tapping the switch goes straight to *Create master password*, then turns the lock off.
+- **Change master password**: type the current one, or tap *Forgot it? Verify with Face ID*.
+- If neither works, the app explains the way out: export a backup (the app is open, so nothing is lost) → Erase all data → Restore → set a new master password.
